@@ -1,0 +1,142 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Environments
+.env
+.env.local
+.env.*.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ruff
+.ruff_cache/
+
+# VCR cassettes (optional - uncomment if you want to track them)
+# tests/cassettes/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Application specific
+*.log
+logs/
+*.pid
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local development
+*.local
+scratch/
+
+# Secrets - NEVER COMMIT THESE
+secrets/
+.secrets/
+credentials/
+*.pem
+*.key
+secrets.yaml
+secrets.json
+
+# Claude Code / AI tools
+.claude/
+.cursor/
+.ai_completion/
+
+# LangSmith / LangChain local data
+.langchain/
+langchain.db
+
+# Eval datasets with potential sensitive data
+evals/datasets/private/
+evals/test_cases/private/
+
+# Deployment platforms
+.railway/
+.vercel/
+.netlify/
+
+# Temporary/backup files
+*.bak
+*.tmp
+*.temp
