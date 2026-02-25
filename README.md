@@ -2,9 +2,11 @@
 
 > AI-powered portfolio assistant for [Ghostfolio](https://ghostfol.io) - Analyze, categorize, and assess risk with natural language
 
-[![PyPI version](https://badge.fury.io/py/ghostfolio-agent.svg)](https://badge.fury.io/py/ghostfolio-agent)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Deployed on Railway](https://img.shields.io/badge/deployed-railway-purple)](https://ghostfolio-agent-production-e24d.up.railway.app)
+
+**Live Demo:** https://ghostfolio-agent-production-e24d.up.railway.app
 
 ## Features
 
@@ -19,7 +21,16 @@
 ### Installation
 
 ```bash
-pip install ghostfolio-agent
+# Clone the repository
+git clone https://github.com/Tanner-Eischen/ghostfolio-agent.git
+cd ghostfolio-agent
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ### Setup
@@ -129,7 +140,7 @@ ghostfolio-agent/
 
 ```bash
 # Clone the repository
-git clone https://github.com/ghostfolio-agent/ghostfolio-agent.git
+git clone https://github.com/Tanner-Eischen/ghostfolio-agent.git
 cd ghostfolio-agent
 
 # Create virtual environment
@@ -183,9 +194,9 @@ The agent automatically integrates with [LangSmith](https://smith.langchain.com/
 
 2. **Add to your `.env` file:**
    ```bash
-   LANGCHAIN_API_KEY=lsv2_pt_xxxxxxxx
-   LANGCHAIN_TRACING_V2=true
-   LANGCHAIN_PROJECT=ghostfolio-agent
+   LANGSMITH_API_KEY=lsv2_pt_xxxxxxxx
+   LANGSMITH_TRACING=true
+   LANGSMITH_PROJECT=AgentForge
    ```
 
 3. **View traces:**
@@ -232,6 +243,21 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Support
 
-- 📖 [Documentation](https://github.com/ghostfolio-agent/ghostfolio-agent#readme)
-- 🐛 [Issue Tracker](https://github.com/ghostfolio-agent/ghostfolio-agent/issues)
-- 💬 [Discussions](https://github.com/ghostfolio-agent/ghostfolio-agent/discussions)
+- 📖 [Documentation](https://github.com/Tanner-Eischen/ghostfolio-agent#readme)
+- 🐛 [Issue Tracker](https://github.com/Tanner-Eischen/ghostfolio-agent/issues)
+- 💬 [Discussions](https://github.com/Tanner-Eischen/ghostfolio-agent/discussions)
+
+## Deployment
+
+This project is deployed on Railway. To deploy your own instance:
+
+1. Fork this repository
+2. Create a new project on [Railway](https://railway.app)
+3. Connect your GitHub repository
+4. Set the required environment variables (see `.env.example`)
+5. Deploy!
+
+Required environment variables:
+- `OPENAI_API_KEY` - Your OpenAI API key
+- `SECRET_KEY` - Random string for session encryption
+- `LANGSMITH_API_KEY` - For observability (optional)

@@ -53,6 +53,7 @@ coverage.xml
 # Environments
 .env
 .env.local
+.env.production
 .env.*.local
 .venv
 env/
@@ -108,6 +109,9 @@ logs/
 # Local development
 *.local
 scratch/
+
+# Railway local config
+.railway/
 
 # Secrets - NEVER COMMIT THESE
 secrets/
