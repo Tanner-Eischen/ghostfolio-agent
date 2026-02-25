@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from langchain_core.tools import tool
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from src.api.coingecko import SYMBOL_TO_ID, CoinGeckoClient
@@ -75,6 +76,7 @@ def is_crypto_symbol(symbol: str) -> bool:
     return symbol.upper() in CRYPTO_SYMBOLS
 
 
+@traceable(name="classify_symbols", run_type="tool")
 def classify_symbols(symbols: list[str]) -> tuple[list[str], list[str]]:
     """Classify symbols into crypto and stock/ETF categories.
 

@@ -1,0 +1,10 @@
+# Results Directory
+
+This directory contains evaluation run reports.
+
+Generated reports follow the naming convention:
+```
+eval_report_YYYYMMDD_HHMMSS.json
+```
+
+Reports are gitignored to avoid cluttering the repository.

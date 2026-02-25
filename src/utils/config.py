@@ -27,13 +27,15 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 100
 
     # LLM Configuration
-    anthropic_api_key: str = Field(default="", description="Anthropic API key for Claude")
-    openai_api_key: str = Field(default="", description="OpenAI API key (fallback)")
+    openai_api_key: str = Field(default="", description="OpenAI API key (required)")
+    anthropic_api_key: str = Field(default="", description="Anthropic API key (optional fallback)")
 
-    # LangSmith Observability
-    langchain_api_key: str = Field(default="", description="LangSmith API key")
-    langchain_tracing_v2: bool = True
-    langchain_project: str = "ghostfolio-agent"
+    # LangSmith Observability (new format)
+    langsmith_tracing: bool = True
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    langsmith_api_key: str = Field(default="", description="LangSmith API key")
+    langsmith_project: str = "AgentForge"
+    langsmith_workspace_id: str = Field(default="", description="LangSmith workspace ID for org-scoped keys")
 
     # Ghostfolio Configuration
     ghostfolio_api_url: str = "http://localhost:3333"

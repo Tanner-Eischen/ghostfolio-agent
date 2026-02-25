@@ -389,7 +389,8 @@ class TestVerificationPipeline:
         )
 
         assert report.processing_time_ms is not None
-        assert report.processing_time_ms > 0
+        # Use >= 0 since very fast verification can complete in < 0.01s (rounds to 0)
+        assert report.processing_time_ms >= 0
 
     # ========================================================================
     # Test report serialization

@@ -12,6 +12,7 @@ Then synthesizes results into a comprehensive verification report.
 from datetime import datetime
 from typing import Any, Literal
 
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from src.utils.logging import get_logger
@@ -117,6 +118,7 @@ class VerificationPipeline:
         self.confidence_threshold = confidence_threshold
         self.strict_mode = strict_mode
 
+    @traceable(name="verification_pipeline_verify", run_type="chain")
     async def verify(
         self,
         response: str,

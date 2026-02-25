@@ -1,0 +1,182 @@
+[
+  {
+    "id": "MS-001",
+    "category": "multi_step",
+    "input": "Analyze my portfolio and tell me if I need to rebalance",
+    "description": "Requires portfolio analysis + risk assessment",
+    "expected_tools": ["portfolio_analysis", "risk_assessment"],
+    "expected_output_contains": ["portfolio", "risk", "rebalance"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-002",
+    "category": "multi_step",
+    "input": "Get current prices for my top 3 holdings and assess if I'm over-concentrated",
+    "description": "Market lookup + risk assessment",
+    "expected_tools": ["market_data_lookup", "risk_assessment"],
+    "expected_output_contains": ["price", "concentrat"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-003",
+    "category": "multi_step",
+    "input": "Check my recent transactions for any compliance issues and categorize my trading patterns",
+    "description": "Transaction categorization + compliance check",
+    "expected_tools": ["transaction_categorize", "compliance_check"],
+    "expected_output_contains": ["transaction", "compliance"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-004",
+    "category": "multi_step",
+    "input": "What's my portfolio worth and how does it compare to last year?",
+    "description": "Current value + performance comparison - single tool handles both",
+    "expected_tools": ["portfolio_analysis"],
+    "expected_output_contains": ["worth", "performance"],
+    "pass_criteria": {
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70,
+      "note": "Single tool can handle both current value and performance comparison"
+    }
+  },
+  {
+    "id": "MS-005",
+    "category": "multi_step",
+    "input": "Analyze my portfolio diversification and recommend which sectors I should add exposure to",
+    "description": "Risk assessment + recommendations",
+    "expected_tools": ["risk_assessment", "portfolio_analysis"],
+    "expected_output_contains": ["diversif", "sector", "recommend"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-006",
+    "category": "multi_step",
+    "input": "Look up Bitcoin's current price and tell me if adding it would increase my portfolio risk",
+    "description": "Market data + risk assessment",
+    "expected_tools": ["market_data_lookup", "risk_assessment"],
+    "expected_output_contains": ["bitcoin", "risk"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-007",
+    "category": "multi_step",
+    "input": "Review my trading history and flag any potential wash sale violations",
+    "description": "Transaction review + compliance check",
+    "expected_tools": ["transaction_categorize", "compliance_check"],
+    "expected_output_contains": ["wash sale", "trade"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-008",
+    "category": "multi_step",
+    "input": "Show me my portfolio allocation by sector and identify any concentration risks",
+    "description": "Portfolio analysis + risk assessment",
+    "expected_tools": ["portfolio_analysis", "risk_assessment"],
+    "expected_output_contains": ["allocation", "sector", "concentrat"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-009",
+    "category": "multi_step",
+    "input": "Get prices for VTI, VXUS, and BND, then tell me my total portfolio value",
+    "description": "Market lookup + portfolio value",
+    "expected_tools": ["market_data_lookup", "portfolio_analysis"],
+    "expected_output_contains": ["price", "value"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-010",
+    "category": "multi_step",
+    "input": "Analyze my portfolio performance over the last year and recommend ways to reduce risk",
+    "description": "Performance analysis + risk recommendations",
+    "expected_tools": ["portfolio_analysis", "risk_assessment"],
+    "expected_output_contains": ["performance", "risk", "recommend"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-011",
+    "category": "multi_step",
+    "input": "What's my current asset allocation and am I compliant with day trading rules?",
+    "description": "Portfolio allocation + compliance check",
+    "expected_tools": ["portfolio_analysis", "compliance_check"],
+    "expected_output_contains": ["allocation", "compliance"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 20000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  },
+  {
+    "id": "MS-012",
+    "category": "multi_step",
+    "input": "Get the current prices for all my holdings and tell me which ones have the best performance",
+    "description": "Market data + performance comparison",
+    "expected_tools": ["market_data_lookup", "portfolio_analysis"],
+    "expected_output_contains": ["price", "performance"],
+    "pass_criteria": {
+      "uses_multiple_tools": true,
+      "response_time_ms_max": 25000,
+      "contains_expected_phrases": true,
+      "no_errors": true,
+      "confidence_min": 70
+    }
+  }
+]

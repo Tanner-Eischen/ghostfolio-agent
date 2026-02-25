@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from langchain_core.tools import tool
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from src.api.ghostfolio import GhostfolioClient
@@ -68,6 +69,7 @@ class TransactionCategorizationResult(BaseModel):
 # ============================================================================
 
 
+@traceable(name="detect_transaction_patterns", run_type="tool")
 def detect_patterns(orders: list[dict[str, Any]]) -> list[str]:
     """Detect transaction patterns from order history.
 
@@ -167,6 +169,7 @@ def detect_patterns(orders: list[dict[str, Any]]) -> list[str]:
     return patterns
 
 
+@traceable(name="generate_transaction_insights", run_type="tool")
 def generate_insights(
     orders: list[dict[str, Any]],
     categories: dict[str, dict[str, Any]],

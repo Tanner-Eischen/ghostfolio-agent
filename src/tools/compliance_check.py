@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from langchain_core.tools import tool
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from src.api.ghostfolio import GhostfolioClient
@@ -102,6 +103,7 @@ CONCENTRATION_LIMIT_PCT = 25.0
 # ============================================================================
 
 
+@traceable(name="check_wash_sale", run_type="tool")
 def check_wash_sale(
     orders: list[dict[str, Any]],
     symbol: str | None = None,
@@ -225,6 +227,7 @@ def check_wash_sale(
     return violations, warnings, recommendations
 
 
+@traceable(name="check_pattern_day_trading", run_type="tool")
 def check_pattern_day_trading(
     orders: list[dict[str, Any]],
     account_value: float = 0.0,
@@ -349,6 +352,7 @@ def check_pattern_day_trading(
     return violations, warnings, recommendations
 
 
+@traceable(name="check_concentration_limit", run_type="tool")
 def check_concentration_limit(
     holdings: list[dict[str, Any]],
     symbol: str | None = None,

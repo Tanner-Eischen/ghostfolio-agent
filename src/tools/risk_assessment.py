@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from langchain_core.tools import tool
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from src.api.ghostfolio import GhostfolioClient
@@ -138,6 +139,7 @@ class RiskAssessmentResult(BaseModel):
 # ============================================================================
 
 
+@traceable(name="calculate_concentration_score", run_type="tool")
 def calculate_concentration_score(holdings: list[dict[str, Any]]) -> tuple[float, float, str | None]:
     """Calculate concentration risk score.
 
@@ -182,6 +184,7 @@ def calculate_concentration_score(holdings: list[dict[str, Any]]) -> tuple[float
     return min(40, score), single_asset_max, max_symbol
 
 
+@traceable(name="calculate_diversification_asset_score", run_type="tool")
 def calculate_diversification_asset_score(holdings: list[dict[str, Any]]) -> int:
     """Calculate diversification score based on asset classes.
 
@@ -207,6 +210,7 @@ def calculate_diversification_asset_score(holdings: list[dict[str, Any]]) -> int
         return 5
 
 
+@traceable(name="calculate_sector_concentration_score", run_type="tool")
 def calculate_sector_concentration_score(
     holdings: list[dict[str, Any]],
 ) -> tuple[int, dict[str, float]]:
@@ -245,6 +249,7 @@ def calculate_sector_concentration_score(
         return 10, sector_allocations
 
 
+@traceable(name="generate_risk_recommendations", run_type="tool")
 def generate_recommendations(
     single_asset_max: float,
     max_symbol: str | None,

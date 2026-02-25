@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from langchain_core.tools import tool
+from langsmith import traceable
 from pydantic import BaseModel, Field
 
 from src.api.ghostfolio import GhostfolioClient
@@ -74,6 +75,7 @@ class PortfolioAnalysisResult(BaseModel):
 # ============================================================================
 
 
+@traceable(name="calculate_diversification_score", run_type="tool")
 def calculate_diversification_score(holdings: list[dict[str, Any]]) -> float:
     """Calculate a diversification score based on portfolio holdings.
 

@@ -164,11 +164,48 @@ python evals/run_evals.py
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ANTHROPIC_API_KEY` | Claude API key | Required |
-| `LANGCHAIN_API_KEY` | LangSmith API key | Required |
+| `LANGCHAIN_API_KEY` | LangSmith API key for tracing | Required for tracing |
+| `LANGCHAIN_TRACING_V2` | Enable LangSmith tracing | `true` |
+| `LANGCHAIN_PROJECT` | LangSmith project name | `ghostfolio-agent` |
 | `GHOSTFOLIO_API_URL` | Ghostfolio instance URL | `http://localhost:3333` |
 | `USE_MOCK_DATA` | Use mock data for development | `false` |
 | `CACHE_TTL_SECONDS` | Cache TTL for market data | `300` |
 | `LOG_LEVEL` | Logging level | `INFO` |
+
+### LangSmith Tracing Setup
+
+The agent automatically integrates with [LangSmith](https://smith.langchain.com/) for observability:
+
+1. **Get your LangSmith API key:**
+   - Go to [LangSmith](https://smith.langchain.com/)
+   - Create a free account or sign in
+   - Go to Settings → API Keys → Create API Key
+
+2. **Add to your `.env` file:**
+   ```bash
+   LANGCHAIN_API_KEY=lsv2_pt_xxxxxxxx
+   LANGCHAIN_TRACING_V2=true
+   LANGCHAIN_PROJECT=ghostfolio-agent
+   ```
+
+3. **View traces:**
+   - All agent calls are automatically traced
+   - View in LangSmith dashboard under your project
+   - Each response includes a `trace_url` for direct access
+
+**What gets traced:**
+- Agent conversations (input/output)
+- Tool calls and results
+- LLM token usage
+- Verification pipeline results
+- Response confidence scores
+
+**Log user feedback:**
+```python
+# After a conversation, log feedback
+response = await agent.chat_with_context("What's my portfolio worth?", session_id="user-123")
+agent.log_user_feedback("user-123", score=1.0, key="thumbs_up")
+```
 
 ## Tech Stack
 

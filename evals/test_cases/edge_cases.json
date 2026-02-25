@@ -1,0 +1,166 @@
+[
+  {
+    "id": "EC-001",
+    "category": "edge_case",
+    "input": "Analyze my portfolio",
+    "description": "Empty portfolio scenario - should handle gracefully",
+    "expected_tools": ["portfolio_analysis"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 15000,
+      "no_errors": true,
+      "graceful_handling": true
+    }
+  },
+  {
+    "id": "EC-002",
+    "category": "edge_case",
+    "input": "What's the price of INVALIDTICKER123?",
+    "description": "Invalid stock symbol - should provide helpful error",
+    "expected_tools": ["market_data_lookup"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 10000,
+      "no_errors": true,
+      "graceful_handling": true
+    }
+  },
+  {
+    "id": "EC-003",
+    "category": "edge_case",
+    "input": "How did my portfolio perform in 1800?",
+    "description": "Invalid date range - should explain data limitations",
+    "expected_tools": [],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "response_time_ms_max": 10000,
+      "no_errors": true,
+      "graceful_handling": true
+    }
+  },
+  {
+    "id": "EC-004",
+    "category": "edge_case",
+    "input": "Show me transactions from the future year 2099",
+    "description": "Future date - should handle gracefully",
+    "expected_tools": ["transaction_categorize"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 15000,
+      "no_errors": true,
+      "graceful_handling": true
+    }
+  },
+  {
+    "id": "EC-005",
+    "category": "edge_case",
+    "input": "What is my portfolio worth in euros?",
+    "description": "Currency conversion request - may need clarification",
+    "expected_tools": ["portfolio_analysis"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 15000,
+      "no_errors": true,
+      "graceful_handling": true
+    }
+  },
+  {
+    "id": "EC-006",
+    "category": "edge_case",
+    "input": "",
+    "description": "Empty input - should ask for clarification",
+    "expected_tools": [],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "response_time_ms_max": 5000,
+      "no_errors": true,
+      "graceful_handling": true,
+      "asks_clarification": true
+    }
+  },
+  {
+    "id": "EC-007",
+    "category": "edge_case",
+    "input": "a",
+    "description": "Single character input - should ask for clarification",
+    "expected_tools": [],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "response_time_ms_max": 5000,
+      "no_errors": true,
+      "graceful_handling": true,
+      "asks_clarification": true
+    }
+  },
+  {
+    "id": "EC-008",
+    "category": "edge_case",
+    "input": "What's the price of cryptocurrency XRP?",
+    "description": "XRP lookup via CoinGecko",
+    "expected_tools": ["market_data_lookup"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 10000,
+      "no_errors": true
+    }
+  },
+  {
+    "id": "EC-009",
+    "category": "edge_case",
+    "input": "Check compliance for an account with zero transactions",
+    "description": "No transactions to check",
+    "expected_tools": ["compliance_check"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 15000,
+      "no_errors": true,
+      "graceful_handling": true
+    }
+  },
+  {
+    "id": "EC-010",
+    "category": "edge_case",
+    "input": "What is the price of 100 different stocks at once?",
+    "description": "Large batch request - should handle or explain limitations",
+    "expected_tools": ["market_data_lookup"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 30000,
+      "no_errors": true,
+      "graceful_handling": true
+    }
+  },
+  {
+    "id": "EC-011",
+    "category": "edge_case",
+    "input": "Analyze risk for a portfolio with only one stock",
+    "description": "Single asset concentration",
+    "expected_tools": ["risk_assessment"],
+    "expected_output_contains": ["concentrat", "risk"],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 15000,
+      "no_errors": true
+    }
+  },
+  {
+    "id": "EC-012",
+    "category": "edge_case",
+    "input": "What's the price of BTC?",
+    "description": "Bitcoin abbreviation lookup",
+    "expected_tools": ["market_data_lookup"],
+    "expected_output_contains": [],
+    "pass_criteria": {
+      "tool_selection_correct": true,
+      "response_time_ms_max": 10000,
+      "no_errors": true
+    }
+  }
+]
