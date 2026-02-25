@@ -1,17 +1,19 @@
 # =============================================================================
-# Railway Multi-Service Configuration
+# Railway Multi-Service Reference
 # =============================================================================
-# This file defines both services (backend + frontend) for Railway deployment
-# using a monorepo approach with separate Dockerfiles.
+# Railway does NOT support "railway up --file" or multiple services in one
+# config. Use the Dashboard to configure each service, then deploy via CLI.
 #
-# Deploy with:
-#   railway up --file railway.services.toml
+# Setup (once):
+#   1. Railway Dashboard: New Project → add two services (e.g. "backend", "frontend")
+#   2. Connect the same GitHub repo to both services
+#   3. Backend service → Settings → Build → Dockerfile path: Dockerfile.backend
+#   4. Frontend service → Settings → Build → Dockerfile path: Dockerfile.frontend
+#   5. Set variables per service (see below)
 #
-# Or configure via Railway Dashboard:
-#   1. Create project with two services
-#   2. Point backend to Dockerfile.backend
-#   3. Point frontend to Dockerfile.frontend
-#   4. Set environment variables for each service
+# Deploy (per service):
+#   railway link    # choose backend or frontend
+#   railway up      # deploys current branch to the linked service
 # =============================================================================
 
 # Backend Service (FastAPI)

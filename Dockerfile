@@ -7,8 +7,9 @@
 #   Local development (with docker-compose):
 #     docker-compose up --build
 #
-#   Railway deployment (backend only):
-#     Use Dockerfile.backend for production
+#   Railway deployment:
+#     Backend: Dockerfile.backend (or railway.backend.toml)
+#     Frontend: Dockerfile.frontend (or railway.json / railway.frontend.toml)
 #
 #   Manual run:
 #     docker build -t ghostfolio-agent .
