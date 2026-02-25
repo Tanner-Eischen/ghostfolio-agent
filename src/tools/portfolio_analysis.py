@@ -259,7 +259,8 @@ async def portfolio_analysis(
                 f"{len(holdings)} holdings, {diversification_score:.1f} diversification score"
             )
 
-            return result
+            # Return dict for JSON-serializable tool output (evals field_present checks)
+            return result.model_dump(mode="json")
 
         except Exception as e:
             logger.error(f"Portfolio analysis failed: {e}")

@@ -1,0 +1,79 @@
+# =============================================================================
+# Ghostfolio Agent - Streamlit Frontend Dockerfile (Railway)
+# =============================================================================
+# Optimized for Railway deployment of the Streamlit frontend only
+#
+# Build: docker build -f Dockerfile.frontend -t ghostfolio-agent-frontend .
+# Run:   docker run -p 8501:8501 --env-file .env ghostfolio-agent-frontend
+#
+# Note: Requires BACKEND_URL environment variable pointing to deployed backend
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Builder stage
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# -----------------------------------------------------------------------------
+# Production stage
+# -----------------------------------------------------------------------------
+FROM python:3.11-slim as production
+
+WORKDIR /app
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Set Python environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser
+USER appuser
+
+# Copy application code
+COPY --chown=appuser:appuser . .
+
+# Streamlit configuration
+ENV STREAMLIT_SERVER_PORT=8501 \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
+    STREAMLIT_SERVER_HEADLESS=true \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    STREAMLIT_SERVER_ENABLE_CORS=false \
+    STREAMLIT_SERVER_ENABLE_XSS_PROTECTION=true
+
+# Railway provides PORT environment variable
+ENV PORT=8501
+EXPOSE 8501
+
+# Health check for Streamlit
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8501}/_stcore/health || exit 1
+
+# Start command using Railway's PORT
+CMD streamlit run app/streamlit_app.py --server.port ${PORT:-8501} --server.address 0.0.0.0

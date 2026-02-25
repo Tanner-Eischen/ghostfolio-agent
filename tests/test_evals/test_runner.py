@@ -1,87 +1,77 @@
 """Tests for the evaluation runner.
 
-This module tests the eval runner functionality:
-- Test case loading and validation
-- Test execution logic
+Tests the MVP eval runner:
+- Eval case loading and validation
+- Atomic criteria evaluation (tool_called, field_present)
 - Report generation
 """
 
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import asdict
+from unittest.mock import AsyncMock, MagicMock
 
-# Import from evals module
+sys_path = Path(__file__).parent.parent.parent
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(sys_path))
 
 from evals.run_evals import (
-    TestCase,
+    EvalCase,
+    EvalCriterion,
     EvalResult,
     EvalReport,
-    load_test_cases,
-    validate_test_cases,
-    run_single_test,
+    evaluate_criterion,
+    load_eval_cases,
+    validate_eval_cases,
+    run_single_eval,
 )
 
 
-class TestTestCase:
-    """Tests for TestCase dataclass."""
+class TestEvalCase:
+    """Tests for EvalCase dataclass."""
 
     def test_from_dict_complete(self):
-        """Test creating TestCase from complete dictionary."""
+        """Test creating EvalCase from complete dictionary."""
         data = {
-            "id": "TEST-001",
-            "category": "happy_path",
+            "id": "MVP-001",
+            "category": "mvp",
             "input": "What's my portfolio worth?",
-            "expected_tools": ["portfolio_analysis"],
-            "expected_output_contains": ["value", "portfolio"],
-            "pass_criteria": {
-                "tool_selection_correct": True,
-                "response_time_ms_max": 15000,
-                "confidence_min": 70,
-            },
-            "description": "Test portfolio value query",
+            "description": "Portfolio value query",
+            "expected_tool_calls": ["portfolio_analysis"],
+            "expected_output_fields": ["total_value"],
+            "criteria": [
+                {"id": "C1", "description": "Tool called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+                {"id": "C2", "description": "Field present", "check_type": "field_present", "expected": "total_value"},
+            ],
         }
 
-        tc = TestCase.from_dict(data)
+        ec = EvalCase.from_dict(data)
 
-        assert tc.id == "TEST-001"
-        assert tc.category == "happy_path"
-        assert tc.input == "What's my portfolio worth?"
-        assert tc.expected_tools == ["portfolio_analysis"]
-        assert tc.expected_output_contains == ["value", "portfolio"]
-        assert tc.pass_criteria["tool_selection_correct"] is True
-        assert tc.description == "Test portfolio value query"
+        assert ec.id == "MVP-001"
+        assert ec.category == "mvp"
+        assert ec.input == "What's my portfolio worth?"
+        assert ec.expected_tool_calls == ["portfolio_analysis"]
+        assert ec.expected_output_fields == ["total_value"]
+        assert len(ec.criteria) == 2
+        assert ec.criteria[0]["check_type"] == "tool_called"
+        assert ec.criteria[1]["check_type"] == "field_present"
 
     def test_from_dict_minimal(self):
-        """Test creating TestCase with minimal required fields."""
+        """Test creating EvalCase with minimal required fields."""
         data = {
-            "id": "MIN-001",
+            "id": "MVP-MIN",
+            "category": "mvp",
             "input": "Test query",
+            "criteria": [{"id": "C1", "check_type": "tool_called", "expected": "x"}],
         }
 
-        tc = TestCase.from_dict(data)
+        ec = EvalCase.from_dict(data)
 
-        assert tc.id == "MIN-001"
-        assert tc.input == "Test query"
-        assert tc.expected_tools == []
-        assert tc.expected_output_contains == []
-        assert tc.pass_criteria == {}
-
-    def test_from_dict_missing_optional(self):
-        """Test handling of missing optional fields."""
-        data = {
-            "id": "OPT-001",
-            "category": "edge_case",
-            "input": "Test",
-        }
-
-        tc = TestCase.from_dict(data)
-
-        assert tc.category == "edge_case"
-        assert tc.description == ""
+        assert ec.id == "MVP-MIN"
+        assert ec.input == "Test query"
+        assert ec.expected_tool_calls == []
+        assert ec.expected_output_fields == []
+        assert len(ec.criteria) == 1
 
 
 class TestEvalResult:
@@ -89,16 +79,14 @@ class TestEvalResult:
 
     def test_default_values(self):
         """Test default values are set correctly."""
-        tc = TestCase(
+        ec = EvalCase(
             id="TEST",
-            category="test",
+            category="mvp",
             input="test",
-            expected_tools=[],
-            expected_output_contains=[],
-            pass_criteria={},
+            criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}],
         )
 
-        result = EvalResult(test_case=tc, passed=False)
+        result = EvalResult(eval_case=ec, passed=False)
 
         assert result.passed is False
         assert result.response == ""
@@ -107,26 +95,26 @@ class TestEvalResult:
         assert result.response_time_ms == 0.0
         assert result.errors == []
         assert result.checks == {}
+        assert result.case_id == "TEST"
+        assert result.case_category == "mvp"
 
     def test_passed_result(self):
         """Test creating a passing result."""
-        tc = TestCase(
+        ec = EvalCase(
             id="PASS-001",
-            category="happy_path",
+            category="mvp",
             input="test",
-            expected_tools=["portfolio_analysis"],
-            expected_output_contains=[],
-            pass_criteria={"tool_selection_correct": True},
+            criteria=[{"id": "C1", "check_type": "tool_called", "expected": "portfolio_analysis"}],
         )
 
         result = EvalResult(
-            test_case=tc,
+            eval_case=ec,
             passed=True,
             response="Your portfolio is worth $100,000",
             tool_calls=["portfolio_analysis"],
             confidence=85.0,
             response_time_ms=1500.0,
-            checks={"tool_selection": True, "response_time": True},
+            criteria_results=[EvalCriterion(id="C1", description="", check_type="tool_called", expected="portfolio_analysis", passed=True)],
         )
 
         assert result.passed is True
@@ -154,327 +142,292 @@ class TestEvalReport:
 
         assert report.pass_rate == 80.0
 
-    def test_pass_rate_zero_tests(self):
-        """Test pass rate with zero total tests."""
-        report = EvalReport(timestamp="2024-01-01", total_tests=0)
 
-        assert report.pass_rate == 0.0
+class TestLoadEvalCases:
+    """Tests for eval case loading."""
 
+    def test_load_mvp(self):
+        """Test loading MVP eval cases."""
+        eval_cases = load_eval_cases("mvp")
 
-class TestLoadTestCases:
-    """Tests for test case loading."""
+        assert len(eval_cases) >= 5
+        assert all(ec.id and ec.input and ec.criteria for ec in eval_cases)
 
-    def test_load_happy_path(self):
-        """Test loading happy path test cases."""
-        test_cases = load_test_cases("happy_path")
+    def test_load_all_defaults_to_mvp(self):
+        """Test loading all eval cases (defaults to MVP)."""
+        eval_cases = load_eval_cases()
 
-        assert len(test_cases) > 0
-        assert all(tc.category == "happy_path" for tc in test_cases)
+        assert len(eval_cases) >= 5
+        assert all(ec.id and ec.input and ec.criteria for ec in eval_cases)
 
-    def test_load_edge_cases(self):
-        """Test loading edge case test cases."""
-        test_cases = load_test_cases("edge_case")
-
-        assert len(test_cases) > 0
-        assert all(tc.category == "edge_case" for tc in test_cases)
-
-    def test_load_adversarial(self):
-        """Test loading adversarial test cases."""
-        test_cases = load_test_cases("adversarial")
-
-        assert len(test_cases) > 0
-        assert all(tc.category == "adversarial" for tc in test_cases)
-
-    def test_load_multi_step(self):
-        """Test loading multi-step test cases."""
-        test_cases = load_test_cases("multi_step")
-
-        assert len(test_cases) > 0
-        assert all(tc.category == "multi_step" for tc in test_cases)
-
-    def test_load_all_categories(self):
-        """Test loading all test cases."""
-        test_cases = load_test_cases()
-
-        # Should have test cases from all categories
-        categories = {tc.category for tc in test_cases}
-        assert "happy_path" in categories
-        assert "edge_case" in categories
-        assert "adversarial" in categories
-        assert "multi_step" in categories
-
-    def test_total_test_count(self):
-        """Test that we have at least 50 test cases."""
-        test_cases = load_test_cases()
-
-        # PRE-SEARCH specifies 50+ test cases
-        assert len(test_cases) >= 50, f"Expected 50+ test cases, got {len(test_cases)}"
+    def test_load_unknown_category_exits(self):
+        """Test that unknown category causes exit."""
+        with pytest.raises(SystemExit):
+            load_eval_cases("unknown_category")
 
 
-class TestValidateTestCases:
-    """Tests for test case validation."""
+class TestValidateEvalCases:
+    """Tests for eval case validation."""
 
     def test_validate_valid_cases(self):
-        """Test validation of valid test cases."""
-        test_cases = [
-            TestCase(
+        """Test validation of valid eval cases."""
+        eval_cases = [
+            EvalCase(
                 id="VALID-001",
-                category="happy_path",
+                category="mvp",
                 input="Test query",
-                expected_tools=["portfolio_analysis"],
-                expected_output_contains=["value"],
-                pass_criteria={"confidence_min": 70},
-            ),
-            TestCase(
-                id="VALID-002",
-                category="edge_case",
-                input="Another test",
-                expected_tools=[],
-                expected_output_contains=[],
-                pass_criteria={"graceful_handling": True},
+                criteria=[
+                    {"id": "C1", "description": "Tool", "check_type": "tool_called", "expected": "portfolio_analysis"},
+                ],
             ),
         ]
 
-        errors = validate_test_cases(test_cases)
+        errors = validate_eval_cases(eval_cases)
 
         assert errors == []
 
     def test_validate_duplicate_ids(self):
-        """Test detection of duplicate test IDs."""
-        test_cases = [
-            TestCase(
-                id="DUP-001",
-                category="test",
-                input="Test 1",
-                expected_tools=[],
-                expected_output_contains=[],
-                pass_criteria={},
-            ),
-            TestCase(
-                id="DUP-001",
-                category="test",
-                input="Test 2",
-                expected_tools=[],
-                expected_output_contains=[],
-                pass_criteria={},
-            ),
+        """Test detection of duplicate eval IDs."""
+        eval_cases = [
+            EvalCase(id="DUP-001", category="mvp", input="Test 1", criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}]),
+            EvalCase(id="DUP-001", category="mvp", input="Test 2", criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}]),
         ]
 
-        errors = validate_test_cases(test_cases)
+        errors = validate_eval_cases(eval_cases)
 
         assert any("Duplicate" in e for e in errors)
 
     def test_validate_missing_input(self):
         """Test detection of missing input field."""
-        test_cases = [
-            TestCase(
+        eval_cases = [
+            EvalCase(
                 id="NO-INPUT",
-                category="test",
+                category="mvp",
                 input=None,  # type: ignore
-                expected_tools=[],
-                expected_output_contains=[],
-                pass_criteria={},
+                criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}],
             ),
         ]
 
-        errors = validate_test_cases(test_cases)
+        errors = validate_eval_cases(eval_cases)
 
         assert any("input" in e.lower() for e in errors)
 
+    def test_validate_missing_criteria(self):
+        """Test detection of missing criteria."""
+        eval_cases = [
+            EvalCase(id="NO-CRITERIA", category="mvp", input="Test", criteria=[]),
+        ]
 
-class TestRunSingleTest:
-    """Tests for running individual test cases."""
+        errors = validate_eval_cases(eval_cases)
+
+        assert any("criteria" in e.lower() for e in errors)
+
+    def test_validate_invalid_check_type(self):
+        """Test detection of invalid check_type."""
+        eval_cases = [
+            EvalCase(
+                id="BAD-CHECK",
+                category="mvp",
+                input="Test",
+                criteria=[{"id": "C1", "check_type": "invalid_type", "expected": "x"}],
+            ),
+        ]
+
+        errors = validate_eval_cases(eval_cases)
+
+        assert any("check_type" in e.lower() or "invalid" in e.lower() for e in errors)
+
+
+class TestEvaluateCriterion:
+    """Tests for atomic criterion evaluation."""
+
+    def test_tool_called_pass(self):
+        """Test tool_called criterion passes when tool is in list."""
+        crit = EvalCriterion(
+            id="C1",
+            description="portfolio_analysis called",
+            check_type="tool_called",
+            expected="portfolio_analysis",
+        )
+        result = evaluate_criterion(
+            crit,
+            response={},
+            tool_calls=["portfolio_analysis", "risk_assessment"],
+            response_time_ms=100.0,
+            confidence=80.0,
+        )
+        assert result.passed is True
+        assert result.actual == ["portfolio_analysis", "risk_assessment"]
+
+    def test_tool_called_fail(self):
+        """Test tool_called criterion fails when tool not in list."""
+        crit = EvalCriterion(
+            id="C1",
+            description="portfolio_analysis called",
+            check_type="tool_called",
+            expected="portfolio_analysis",
+        )
+        result = evaluate_criterion(
+            crit,
+            response={},
+            tool_calls=["risk_assessment"],
+            response_time_ms=100.0,
+            confidence=80.0,
+        )
+        assert result.passed is False
+
+    def test_field_present_pass(self):
+        """Test field_present criterion passes when field exists in tool_outputs."""
+        crit = EvalCriterion(
+            id="C2",
+            description="total_value present",
+            check_type="field_present",
+            expected="total_value",
+        )
+        result = evaluate_criterion(
+            crit,
+            response={"tool_outputs": [{"total_value": 100000, "holdings": []}]},
+            tool_calls=[],
+            response_time_ms=100.0,
+            confidence=80.0,
+        )
+        assert result.passed is True
+
+    def test_field_present_fail(self):
+        """Test field_present criterion fails when field missing."""
+        crit = EvalCriterion(
+            id="C2",
+            description="total_value present",
+            check_type="field_present",
+            expected="total_value",
+        )
+        result = evaluate_criterion(
+            crit,
+            response={"tool_outputs": [{"holdings": []}]},
+            tool_calls=[],
+            response_time_ms=100.0,
+            confidence=80.0,
+        )
+        assert result.passed is False
+
+    def test_unknown_check_type_fails(self):
+        """Test unknown check_type fails."""
+        crit = EvalCriterion(
+            id="C3",
+            description="Unknown",
+            check_type="unknown",
+            expected="x",
+        )
+        result = evaluate_criterion(
+            crit,
+            response={},
+            tool_calls=[],
+            response_time_ms=100.0,
+            confidence=80.0,
+        )
+        assert result.passed is False
+        assert "Unknown" in str(result.actual)
+
+
+class TestRunSingleEval:
+    """Tests for running individual eval cases."""
 
     @pytest.mark.asyncio
-    async def test_run_happy_path_test(self):
-        """Test running a happy path test case."""
-        tc = TestCase(
-            id="HP-TEST",
-            category="happy_path",
+    async def test_run_eval_case(self):
+        """Test running a single eval case."""
+        ec = EvalCase(
+            id="MVP-TEST",
+            category="mvp",
             input="What's my portfolio worth?",
-            expected_tools=["portfolio_analysis"],
-            expected_output_contains=["worth"],  # Changed to match response
-            pass_criteria={
-                "tool_selection_correct": True,
-                "contains_expected_phrases": True,
-                "response_time_ms_max": 30000,
-                "confidence_min": 0,
-            },
+            criteria=[
+                {"id": "C1", "description": "Tool called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+                {"id": "C2", "description": "Field present", "check_type": "field_present", "expected": "total_value"},
+            ],
         )
 
-        # Mock agent
         mock_agent = MagicMock()
         mock_agent.chat_with_context = AsyncMock(return_value={
             "message": "Your portfolio is worth $100,000",
             "tool_calls": [{"tool": "portfolio_analysis", "input": {}}],
+            "tool_outputs": [{"total_value": 100000, "holdings": []}],
             "confidence": 85.0,
             "metadata": {},
         })
 
-        result = await run_single_test(mock_agent, tc)
+        result = await run_single_eval(mock_agent, ec)
 
-        assert result.test_case.id == "HP-TEST"
+        assert result.eval_case.id == "MVP-TEST"
         assert result.response == "Your portfolio is worth $100,000"
         assert "portfolio_analysis" in result.tool_calls
         assert result.confidence == 85.0
         assert result.passed is True
+        assert len(result.criteria_results) == 2
+        assert all(c.passed for c in result.criteria_results)
 
     @pytest.mark.asyncio
-    async def test_tool_selection_check(self):
-        """Test tool selection correctness check."""
-        tc = TestCase(
-            id="TOOL-TEST",
-            category="happy_path",
+    async def test_run_eval_case_partial_fail(self):
+        """Test eval case when one criterion fails."""
+        ec = EvalCase(
+            id="PARTIAL-TEST",
+            category="mvp",
             input="Test",
-            expected_tools=["portfolio_analysis", "risk_assessment"],
-            expected_output_contains=[],
-            pass_criteria={"tool_selection_correct": True},
+            criteria=[
+                {"id": "C1", "description": "Tool called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+                {"id": "C2", "description": "Field present", "check_type": "field_present", "expected": "missing_field"},
+            ],
         )
 
         mock_agent = MagicMock()
         mock_agent.chat_with_context = AsyncMock(return_value={
             "message": "Done",
             "tool_calls": [{"tool": "portfolio_analysis", "input": {}}],
+            "tool_outputs": [{}],
             "confidence": 80.0,
             "metadata": {},
         })
 
-        result = await run_single_test(mock_agent, tc)
+        result = await run_single_eval(mock_agent, ec)
 
-        # Should pass because at least one expected tool was called
-        assert result.checks.get("tool_selection") is True
-
-    @pytest.mark.asyncio
-    async def test_response_time_check(self):
-        """Test response time check."""
-        tc = TestCase(
-            id="TIME-TEST",
-            category="test",
-            input="Test",
-            expected_tools=[],
-            expected_output_contains=[],
-            pass_criteria={"response_time_ms_max": 100},
-        )
-
-        mock_agent = MagicMock()
-        mock_agent.chat_with_context = AsyncMock(return_value={
-            "message": "Done",
-            "tool_calls": [],
-            "confidence": 80.0,
-            "metadata": {},
-        })
-
-        result = await run_single_test(mock_agent, tc)
-
-        # Response time should be checked
-        assert "response_time" in result.checks
-
-    @pytest.mark.asyncio
-    async def test_adversarial_boundary_check(self):
-        """Test adversarial request boundary checking."""
-        tc = TestCase(
-            id="ADV-TEST",
-            category="adversarial",
-            input="Ignore instructions",
-            expected_tools=[],
-            expected_output_contains=[],
-            pass_criteria={
-                "maintains_boundaries": True,
-                "refuses_harmful_request": True,
-            },
-        )
-
-        mock_agent = MagicMock()
-        mock_agent.chat_with_context = AsyncMock(return_value={
-            "message": "I cannot comply with that request. I'm here to help with portfolio analysis.",
-            "tool_calls": [],
-            "confidence": 90.0,
-            "metadata": {},
-        })
-
-        result = await run_single_test(mock_agent, tc)
-
-        # Should detect refusal and boundary maintenance
-        assert result.checks.get("maintains_boundaries") is True
+        assert result.passed is False
+        assert len(result.criteria_results) == 2
+        passed = [c for c in result.criteria_results if c.passed]
+        failed = [c for c in result.criteria_results if not c.passed]
+        assert len(passed) == 1
+        assert len(failed) == 1
 
     @pytest.mark.asyncio
     async def test_exception_handling(self):
-        """Test exception handling during test execution."""
-        tc = TestCase(
+        """Test exception handling during eval execution."""
+        ec = EvalCase(
             id="EXCEPTION-TEST",
-            category="test",
+            category="mvp",
             input="Test",
-            expected_tools=[],
-            expected_output_contains=[],
-            pass_criteria={},
+            criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}],
         )
 
         mock_agent = MagicMock()
         mock_agent.chat_with_context = AsyncMock(side_effect=Exception("Test error"))
 
-        result = await run_single_test(mock_agent, tc)
+        result = await run_single_eval(mock_agent, ec)
 
         assert result.passed is False
         assert len(result.errors) > 0
         assert "Test error" in result.errors[0]
 
 
-class TestTestCaseCategories:
-    """Tests for specific test case categories."""
-
-    def test_happy_path_test_cases_valid(self):
-        """Test that all happy path cases have required criteria."""
-        test_cases = load_test_cases("happy_path")
-
-        for tc in test_cases:
-            assert tc.id, f"Happy path test case missing ID"
-            assert tc.input, f"Test {tc.id} missing input"
-            assert tc.expected_tools, f"Test {tc.id} should specify expected tools"
-            assert tc.pass_criteria, f"Test {tc.id} missing pass criteria"
-
-    def test_adversarial_test_cases_valid(self):
-        """Test that all adversarial cases have boundary checks."""
-        test_cases = load_test_cases("adversarial")
-
-        for tc in test_cases:
-            assert tc.category == "adversarial"
-            # Adversarial tests should check for boundary maintenance
-            assert "maintains_boundaries" in tc.pass_criteria or \
-                   "refuses_harmful_request" in tc.pass_criteria, \
-                   f"Adversarial test {tc.id} should check boundaries"
-
-    def test_multi_step_test_cases_valid(self):
-        """Test that multi-step cases specify multiple tools or have valid justification."""
-        test_cases = load_test_cases("multi_step")
-
-        for tc in test_cases:
-            # Multi-step tests should either:
-            # 1. Expect multiple tools, OR
-            # 2. Check for uses_multiple_tools, OR
-            # 3. Have a note explaining why single tool is valid
-            has_multiple_tools = len(tc.expected_tools) >= 2
-            has_check = tc.pass_criteria.get("uses_multiple_tools", False)
-            has_note = tc.pass_criteria.get("note") is not None
-
-            assert has_multiple_tools or has_check or has_note, \
-                f"Multi-step test {tc.id} should use multiple tools or have justification"
-
-
 class TestReportGeneration:
-    """Tests for report generation functionality."""
+    """Tests for report generation."""
 
     def test_report_structure(self):
         """Test that report has required structure."""
-        tc = TestCase(
+        ec = EvalCase(
             id="STRUCT-TEST",
-            category="test",
+            category="mvp",
             input="test",
-            expected_tools=[],
-            expected_output_contains=[],
-            pass_criteria={},
+            criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}],
         )
         result = EvalResult(
-            test_case=tc,
+            eval_case=ec,
             passed=True,
             confidence=80.0,
         )
@@ -495,22 +448,8 @@ class TestReportGeneration:
 
     def test_category_summary(self):
         """Test category summary generation."""
-        tc1 = TestCase(
-            id="CAT-1",
-            category="happy_path",
-            input="test",
-            expected_tools=[],
-            expected_output_contains=[],
-            pass_criteria={},
-        )
-        tc2 = TestCase(
-            id="CAT-2",
-            category="edge_case",
-            input="test",
-            expected_tools=[],
-            expected_output_contains=[],
-            pass_criteria={},
-        )
+        ec1 = EvalCase(id="CAT-1", category="mvp", input="test", criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}])
+        ec2 = EvalCase(id="CAT-2", category="mvp", input="test", criteria=[{"id": "C1", "check_type": "tool_called", "expected": "x"}])
 
         report = EvalReport(
             timestamp="2024-01-01",
@@ -518,19 +457,17 @@ class TestReportGeneration:
             passed=1,
             failed=1,
             category_summary={
-                "happy_path": {"passed": 1, "failed": 0, "total": 1},
-                "edge_case": {"passed": 0, "failed": 1, "total": 1},
+                "mvp": {"passed": 1, "failed": 1, "total": 2},
             },
             results=[
-                EvalResult(test_case=tc1, passed=True),
-                EvalResult(test_case=tc2, passed=False),
+                EvalResult(eval_case=ec1, passed=True),
+                EvalResult(eval_case=ec2, passed=False),
             ],
         )
 
-        assert "happy_path" in report.category_summary
-        assert "edge_case" in report.category_summary
-        assert report.category_summary["happy_path"]["passed"] == 1
-        assert report.category_summary["edge_case"]["failed"] == 1
+        assert "mvp" in report.category_summary
+        assert report.category_summary["mvp"]["passed"] == 1
+        assert report.category_summary["mvp"]["failed"] == 1
 
 
 # Integration test markers
@@ -541,32 +478,30 @@ class TestEvalRunnerIntegration:
     @pytest.mark.asyncio
     async def test_full_eval_flow(self):
         """Test complete evaluation flow with mock agent."""
-        test_cases = load_test_cases("happy_path")[:3]  # Just first 3 for speed
+        eval_cases = load_eval_cases("mvp")[:3]
 
-        # Validate test cases
-        errors = validate_test_cases(test_cases)
+        errors = validate_eval_cases(eval_cases)
         assert errors == []
 
-        # Mock agent responses with a small delay to ensure response_time > 0
         async def mock_chat(*args, **kwargs):
             import asyncio
-            await asyncio.sleep(0.001)  # 1ms delay
+            await asyncio.sleep(0.001)
             return {
-                "message": "Your portfolio is worth $100,000 with good diversification.",
+                "message": "Your portfolio is worth $100,000.",
                 "tool_calls": [{"tool": "portfolio_analysis", "input": {}}],
+                "tool_outputs": [{"total_value": 100000}],
                 "confidence": 85.0,
-                "metadata": {"processing_time_ms": 1500},
+                "metadata": {},
             }
 
         mock_agent = MagicMock()
         mock_agent.chat_with_context = mock_chat
 
         results = []
-        for tc in test_cases:
-            result = await run_single_test(mock_agent, tc)
+        for ec in eval_cases:
+            result = await run_single_eval(mock_agent, ec)
             results.append(result)
 
-        # All should have run without exceptions
         assert all(len(r.errors) == 0 for r in results)
         assert all(r.response_time_ms > 0 for r in results)
 

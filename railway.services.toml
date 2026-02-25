@@ -1,0 +1,56 @@
+# =============================================================================
+# Railway Multi-Service Configuration
+# =============================================================================
+# This file defines both services (backend + frontend) for Railway deployment
+# using a monorepo approach with separate Dockerfiles.
+#
+# Deploy with:
+#   railway up --file railway.services.toml
+#
+# Or configure via Railway Dashboard:
+#   1. Create project with two services
+#   2. Point backend to Dockerfile.backend
+#   3. Point frontend to Dockerfile.frontend
+#   4. Set environment variables for each service
+# =============================================================================
+
+# Backend Service (FastAPI)
+[[services]]
+name = "backend"
+dockerfile = "Dockerfile.backend"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+
+[services.variables]
+# Required - set these in Railway Dashboard or CLI
+# OPENAI_API_KEY = ""
+# LANGSMITH_API_KEY = ""
+# LANGSMITH_WORKSPACE_ID = ""
+# GHOSTFOLIO_ACCESS_TOKEN = ""
+
+# Optional with defaults
+LANGSMITH_TRACING = "true"
+LANGSMITH_ENDPOINT = "https://api.smith.langchain.com"
+LANGSMITH_PROJECT = "AgentForge"
+USE_MOCK_DATA = "true"
+YAHOO_FINANCE_ENABLED = "true"
+ENVIRONMENT = "production"
+LOG_LEVEL = "INFO"
+
+# Frontend Service (Streamlit)
+[[services]]
+name = "frontend"
+dockerfile = "Dockerfile.frontend"
+healthcheckPath = "/_stcore/health"
+healthcheckTimeout = 30
+
+[services.variables]
+# Reference backend URL (Railway internal DNS)
+BACKEND_URL = "http://backend.railway.internal:8000"
+
+# If using Railway public URLs:
+# BACKEND_URL = "https://${{backend.RAILWAY_PUBLIC_DOMAIN}}"
+
+# Optional settings
+ENVIRONMENT = "production"
+LOG_LEVEL = "INFO"

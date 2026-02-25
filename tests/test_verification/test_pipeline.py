@@ -1,5 +1,7 @@
 """Tests for VerificationPipeline orchestration."""
 
+from datetime import datetime, timezone, timedelta
+
 import pytest
 
 from src.verification.pipeline import (
@@ -551,3 +553,118 @@ class TestPipelineIntegration:
 
         # Should pass verification
         assert report.passed is True
+
+
+class TestPortfolioTotalConsistency:
+    """Tests for portfolio total consistency domain verification."""
+
+    @pytest.fixture
+    def pipeline(self) -> VerificationPipeline:
+        return VerificationPipeline()
+
+    @pytest.mark.asyncio
+    async def test_portfolio_total_consistency_pass(
+        self, pipeline: VerificationPipeline
+    ) -> None:
+        """Matching totals: no PORTFOLIO_TOTAL_MISMATCH warning."""
+        response_data = {
+            "total_value": 100000,
+            "holdings": [
+                {"symbol": "A", "value": 60000},
+                {"symbol": "B", "value": 40000},
+            ],
+        }
+        report = await pipeline.verify_with_data(
+            "Your portfolio is worth $100,000.",
+            response_data,
+            "What's my portfolio worth?",
+        )
+        mismatch_warnings = [w for w in report.warnings if w.startswith("PORTFOLIO_TOTAL_MISMATCH:")]
+        assert len(mismatch_warnings) == 0
+
+    @pytest.mark.asyncio
+    async def test_portfolio_total_consistency_warns_on_mismatch(
+        self, pipeline: VerificationPipeline
+    ) -> None:
+        """Mismatched totals: warning and escalation trigger."""
+        response_data = {
+            "total_value": 100000,
+            "holdings": [
+                {"symbol": "A", "value": 70000},
+                {"symbol": "B", "value": 20000},
+            ],
+        }
+        report = await pipeline.verify_with_data(
+            "Your portfolio is worth $100,000.",
+            response_data,
+            "What's my portfolio worth?",
+        )
+        mismatch_warnings = [w for w in report.warnings if w.startswith("PORTFOLIO_TOTAL_MISMATCH:")]
+        assert len(mismatch_warnings) >= 1
+        assert any("Portfolio total inconsistency" in t for t in report.escalation.triggers)
+
+    @pytest.mark.asyncio
+    async def test_portfolio_total_consistency_skips_without_holdings(
+        self, pipeline: VerificationPipeline
+    ) -> None:
+        """No holdings: skip rule, no warning."""
+        response_data = {"total_value": 100000, "holdings": []}
+        report = await pipeline.verify_with_data(
+            "Your portfolio is worth $100,000.",
+            response_data,
+            "What's my portfolio worth?",
+        )
+        mismatch_warnings = [w for w in report.warnings if w.startswith("PORTFOLIO_TOTAL_MISMATCH:")]
+        assert len(mismatch_warnings) == 0
+
+
+class TestMarketDataFreshness:
+    """Tests for market data freshness domain verification."""
+
+    @pytest.fixture
+    def pipeline(self) -> VerificationPipeline:
+        return VerificationPipeline()
+
+    @pytest.mark.asyncio
+    async def test_market_data_freshness_pass(
+        self, pipeline: VerificationPipeline
+    ) -> None:
+        """Fresh timestamp: no MARKET_DATA_STALE warning."""
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        tool_outputs = [{"price": 150.0, "data": [{"symbol": "AAPL", "price": 150}], "timestamp": ts}]
+        report = await pipeline.verify(
+            "AAPL is at $150.",
+            tool_outputs,
+            "What's AAPL trading at?",
+        )
+        stale_warnings = [w for w in report.warnings if w.startswith("MARKET_DATA_STALE:")]
+        assert len(stale_warnings) == 0
+
+    @pytest.mark.asyncio
+    async def test_market_data_freshness_warns_when_stale(
+        self, pipeline: VerificationPipeline
+    ) -> None:
+        """Stale timestamp: MARKET_DATA_STALE warning."""
+        ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        tool_outputs = [{"price": 150.0, "data": [{"symbol": "AAPL", "price": 150}], "timestamp": ts}]
+        report = await pipeline.verify(
+            "AAPL is at $150.",
+            tool_outputs,
+            "What's AAPL trading at?",
+        )
+        stale_warnings = [w for w in report.warnings if w.startswith("MARKET_DATA_STALE:")]
+        assert len(stale_warnings) >= 1
+
+    @pytest.mark.asyncio
+    async def test_market_data_freshness_warns_when_timestamp_missing(
+        self, pipeline: VerificationPipeline
+    ) -> None:
+        """Missing timestamp: MARKET_DATA_TIMESTAMP_MISSING warning."""
+        tool_outputs = [{"price": 150.0, "data": [{"symbol": "AAPL", "price": 150}]}]
+        report = await pipeline.verify(
+            "AAPL is at $150.",
+            tool_outputs,
+            "What's AAPL trading at?",
+        )
+        missing_warnings = [w for w in report.warnings if w.startswith("MARKET_DATA_TIMESTAMP_MISSING:")]
+        assert len(missing_warnings) >= 1

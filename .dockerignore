@@ -1,0 +1,94 @@
+# =============================================================================
+# Docker Ignore File for Ghostfolio Agent
+# =============================================================================
+# Exclude files not needed in Docker build to reduce context size
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+.eggs
+*.egg
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+*.cover
+
+# Virtual environments
+venv
+.venv
+env
+.env.local
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Test files
+tests/
+test_*.py
+*_test.py
+conftest.py
+
+# Development files
+scripts/
+*.log
+*.tmp
+
+# Evaluation files (not needed in production)
+evals/
+
+# Environment files (use docker-compose env vars instead)
+.env
+.env.*
+!.env.example
+
+# Docker files (prevent recursive context)
+docker-compose*.yml
+.dockerignore
+
+# Railway files (not needed in container)
+railway*.toml
+railway*.json
+.env.production
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.whl
+
+# Jupyter notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# Local data
+data/
+*.db
+*.sqlite

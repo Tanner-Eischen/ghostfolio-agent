@@ -9,13 +9,26 @@ MVP frontend providing:
 - Session management
 
 Task #14: Build Streamlit MVP Frontend
+
+This frontend connects to the FastAPI backend via HTTP.
+Run the backend with: python -m src.api.routes
+Or: uvicorn src.api.routes:app --reload
 """
 
-import asyncio
+import os
+import sys
+from pathlib import Path
 import uuid
 from typing import Any
 
+import httpx
 import streamlit as st
+
+# Add project root to Python path for src module imports
+# This allows the app to be run from any directory
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 # Configure page before any other Streamlit commands
 st.set_page_config(
@@ -24,6 +37,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# Backend API configuration
+# Priority: BACKEND_URL env var > default localhost
+# For Railway: Set BACKEND_URL in environment
+# For local dev: Uses localhost:8001
+API_BASE_URL = os.environ.get("BACKEND_URL", "http://localhost:8001")
 
 # Constants
 CONFIDENCE_THRESHOLDS = {
@@ -55,8 +74,8 @@ def init_session_state() -> None:
         st.session_state.messages = []
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
-    if "agent" not in st.session_state:
-        st.session_state.agent = None
+    if "backend_healthy" not in st.session_state:
+        st.session_state.backend_healthy = False
     if "last_response" not in st.session_state:
         st.session_state.last_response = None
     if "show_debug" not in st.session_state:
@@ -67,51 +86,180 @@ def init_session_state() -> None:
         st.session_state.portfolio_value = None
     if "portfolio_performance" not in st.session_state:
         st.session_state.portfolio_performance = None
+    if "page" not in st.session_state:
+        st.session_state.page = "Chat"
+    if "eval_report" not in st.session_state:
+        st.session_state.eval_report = None
 
 
-def get_agent():
-    """Get or initialize the GhostfolioAgent lazily."""
-    if st.session_state.agent is None:
-        with st.spinner("Initializing agent..."):
-            try:
-                from src.agent import GhostfolioAgent
+def check_backend_health() -> tuple[bool, dict[str, Any] | None]:
+    """Check if the FastAPI backend is healthy.
 
-                st.session_state.agent = GhostfolioAgent(
-                    model="gpt-4o-mini",
-                    temperature=0.0,
-                    use_verification=True,
-                    verification_strict_mode=False,
-                    enable_tracing=True,
-                )
-            except Exception as e:
-                st.error(f"Failed to initialize agent: {e}")
-                return None
-    return st.session_state.agent
-
-
-async def chat_with_agent(agent, message: str, session_id: str) -> dict[str, Any]:
-    """Async wrapper for agent chat."""
-    return await agent.chat_with_context(message, session_id=session_id)
-
-
-def run_async_chat(agent, message: str, session_id: str) -> dict[str, Any]:
-    """Run async chat in sync context."""
+    Returns:
+        Tuple of (is_healthy, health_data)
+    """
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(chat_with_agent(agent, message, session_id))
-        loop.close()
-        return result
-    except Exception as e:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(f"{API_BASE_URL}/health")
+            if response.status_code == 200:
+                try:
+                    return True, response.json()
+                except (ValueError, KeyError):
+                    # JSON parsing failed - backend returned invalid response
+                    return True, {"status": "ok", "warning": "Invalid health response format"}
+            # Non-200 status - backend is unhealthy
+            return False, {"error": f"Backend returned status {response.status_code}"}
+    except httpx.ConnectError:
+        # Connection refused - backend not running
+        return False, {"error": "Connection refused - backend not running"}
+    except httpx.TimeoutException:
+        # Request timed out - backend may be overloaded
+        return False, {"error": "Health check timed out - backend may be overloaded"}
+    except httpx.InvalidURL:
+        # Invalid URL configuration
+        return False, {"error": f"Invalid backend URL: {API_BASE_URL}"}
+    except Exception:
+        # Catch-all for unexpected errors - don't expose internal details
+        return False, {"error": "Unable to reach backend server"}
+
+
+def send_chat_message(message: str, session_id: str) -> dict[str, Any]:
+    """Send a chat message to the FastAPI backend.
+
+    Args:
+        message: User's message
+        session_id: Session identifier
+
+    Returns:
+        Response dict with message, confidence, tool_calls, etc.
+    """
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                f"{API_BASE_URL}/chat",
+                json={
+                    "message": message,
+                    "session_id": session_id,
+                },
+            )
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                except (ValueError, KeyError):
+                    return {
+                        "message": "The backend returned an invalid response. Please try again.",
+                        "confidence": 0.0,
+                        "confidence_level": "VERY_LOW",
+                        "tool_calls": [],
+                        "verification_passed": False,
+                        "requires_escalation": True,
+                        "escalation_triggers": ["Invalid JSON response from backend"],
+                        "metadata": {"error": "Invalid response format"},
+                    }
+
+                return {
+                    "message": data.get("response", "No response received"),
+                    "confidence": data.get("confidence", 0),
+                    "confidence_level": data.get("confidence_level", "VERY_LOW"),
+                    "tool_calls": data.get("tool_calls", []),
+                    "session_id": data.get("session_id", session_id),
+                    "verification_passed": data.get("verification_passed", True),
+                    "requires_escalation": data.get("requires_escalation", False),
+                    "escalation_triggers": [],
+                    "metadata": {
+                        "processing_time_ms": data.get("processing_time_ms", 0),
+                        "tools_used": len(data.get("tool_calls", [])),
+                    },
+                }
+            else:
+                # Handle non-200 status codes
+                try:
+                    error_data = response.json()
+                    error_detail = error_data.get("detail", f"Server returned status {response.status_code}")
+                except (ValueError, KeyError):
+                    error_detail = f"Server returned status {response.status_code}"
+
+                # Provide user-friendly messages based on status code
+                if response.status_code == 401:
+                    user_message = "Authentication required. Please check your API credentials."
+                elif response.status_code == 403:
+                    user_message = "Access denied. You don't have permission to perform this action."
+                elif response.status_code == 404:
+                    user_message = "The requested resource was not found."
+                elif response.status_code == 429:
+                    user_message = "Too many requests. Please wait a moment and try again."
+                elif response.status_code >= 500:
+                    user_message = "The backend server encountered an error. Please try again later."
+                else:
+                    user_message = f"Request failed: {error_detail}"
+
+                return {
+                    "message": user_message,
+                    "confidence": 0.0,
+                    "confidence_level": "VERY_LOW",
+                    "tool_calls": [],
+                    "verification_passed": False,
+                    "requires_escalation": True,
+                    "escalation_triggers": [f"HTTP {response.status_code}"],
+                    "metadata": {"error": error_detail},
+                }
+
+    except httpx.ConnectError:
         return {
-            "message": f"Error: {str(e)}",
+            "message": "Cannot connect to the backend server. Please ensure the FastAPI server is running.",
             "confidence": 0.0,
             "confidence_level": "VERY_LOW",
             "tool_calls": [],
             "verification_passed": False,
             "requires_escalation": True,
-            "escalation_triggers": [str(e)],
-            "metadata": {"error": str(e)},
+            "escalation_triggers": ["Connection refused - backend not running"],
+            "metadata": {"error": "Connection refused"},
+        }
+    except httpx.TimeoutException:
+        return {
+            "message": "The request timed out. This can happen with complex queries. Please try again or simplify your question.",
+            "confidence": 0.0,
+            "confidence_level": "VERY_LOW",
+            "tool_calls": [],
+            "verification_passed": False,
+            "requires_escalation": True,
+            "escalation_triggers": ["Request timeout after 60 seconds"],
+            "metadata": {"error": "Timeout"},
+        }
+    except httpx.InvalidURL:
+        return {
+            "message": "The backend URL configuration is invalid. Please check your environment settings.",
+            "confidence": 0.0,
+            "confidence_level": "VERY_LOW",
+            "tool_calls": [],
+            "verification_passed": False,
+            "requires_escalation": True,
+            "escalation_triggers": ["Invalid backend URL"],
+            "metadata": {"error": "Invalid URL"},
+        }
+    except httpx.RequestError:
+        return {
+            "message": "A network error occurred while communicating with the backend. Please check your connection.",
+            "confidence": 0.0,
+            "confidence_level": "VERY_LOW",
+            "tool_calls": [],
+            "verification_passed": False,
+            "requires_escalation": True,
+            "escalation_triggers": ["Network error"],
+            "metadata": {"error": "Network error"},
+        }
+    except Exception:
+        # Catch-all for unexpected errors - don't expose internal details
+        return {
+            "message": "An unexpected error occurred. Please try again. If the problem persists, contact support.",
+            "confidence": 0.0,
+            "confidence_level": "VERY_LOW",
+            "tool_calls": [],
+            "verification_passed": False,
+            "requires_escalation": True,
+            "escalation_triggers": ["Unexpected error"],
+            "metadata": {"error": "Unexpected error"},
         }
 
 
@@ -138,12 +286,12 @@ def render_confidence_indicator(score: float, level: str) -> None:
 
 
 def render_tool_calls(tool_calls: list[dict]) -> None:
-    """Render tool calls in a compact format."""
+    """Render tool calls in a compact format with badges."""
     if not tool_calls:
         return
 
     st.markdown("**Tools Used:**")
-    tool_names = [tc.get("tool", "unknown") for tc in tool_calls]
+    tool_names = [tc.get("tool", tc.get("name", "unknown")) for tc in tool_calls]
 
     # Create badges for each tool
     badges_html = ""
@@ -160,6 +308,57 @@ def render_tool_calls(tool_calls: list[dict]) -> None:
         badges_html += f'<span style="background: {color}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; margin-right: 4px;">{tool}</span>'
 
     st.markdown(badges_html, unsafe_allow_html=True)
+
+
+def render_tool_calls_collapsible(tool_calls: list[dict]) -> None:
+    """Render tool calls in collapsible sections with full details.
+
+    Each tool call is shown in an expandable expander with:
+    - Tool name
+    - Input parameters (collapsible)
+    - Output (if available)
+
+    Args:
+        tool_calls: List of tool call dicts with 'tool' and 'input' keys
+    """
+    if not tool_calls:
+        return
+
+    with st.expander(f"🔧 Tool Calls ({len(tool_calls)})", expanded=False):
+        for i, tc in enumerate(tool_calls, 1):
+            tool_name = tc.get("tool", tc.get("name", "unknown"))
+            tool_input = tc.get("input", {})
+            tool_output = tc.get("output", None)
+
+            # Tool header with colored badge
+            colors = {
+                "portfolio_analysis": "#3498db",
+                "risk_assessment": "#e74c3c",
+                "transaction_categorize": "#9b59b6",
+                "market_data_lookup": "#2ecc71",
+                "compliance_check": "#f39c12",
+            }
+            color = colors.get(tool_name, "#95a5a6")
+
+            st.markdown(
+                f'<span style="background: {color}; color: white; padding: 4px 12px; border-radius: 12px; font-weight: 500;">{i}. {tool_name}</span>',
+                unsafe_allow_html=True,
+            )
+
+            # Input section (collapsible)
+            if tool_input:
+                with st.expander("📥 Input", expanded=False):
+                    st.json(tool_input)
+
+            # Output section (collapsible)
+            if tool_output:
+                with st.expander("📤 Output", expanded=False):
+                    if isinstance(tool_output, dict):
+                        st.json(tool_output)
+                    else:
+                        st.markdown(f"```\n{tool_output}\n```")
+
+            st.markdown("")  # Spacing between tools
 
 
 def render_escalation_warning(triggers: list[str]) -> None:
@@ -213,6 +412,37 @@ def render_sidebar() -> None:
             """,
             unsafe_allow_html=True,
         )
+        st.divider()
+
+        # Page selector
+        st.session_state.page = st.radio(
+            "View",
+            ["Chat", "Evaluations"],
+            index=0 if st.session_state.page == "Chat" else 1,
+            label_visibility="collapsed",
+        )
+        st.divider()
+
+        # Backend Status
+        st.subheader("Backend Status")
+        is_healthy, health_data = check_backend_health()
+        st.session_state.backend_healthy = is_healthy
+
+        if is_healthy:
+            st.success("Connected")
+            with st.expander("Details", expanded=False):
+                st.json(health_data or {})
+        else:
+            st.error("Disconnected")
+            # Show the specific error reason if available
+            if health_data and "error" in health_data:
+                st.caption(health_data["error"])
+            # Provide helpful guidance
+            st.caption("To start the backend:")
+            st.code("uvicorn src.api.routes:app --reload", language="bash")
+            st.caption("Or from the project root:")
+            st.code("python -m src.api.routes", language="bash")
+
         st.divider()
 
         # Portfolio Summary Section
@@ -296,8 +526,13 @@ def render_sidebar() -> None:
         )
 
 
-def render_chat_message(message: dict) -> None:
-    """Render a single chat message."""
+def render_chat_message(message: dict, use_collapsible_tools: bool = True) -> None:
+    """Render a single chat message.
+
+    Args:
+        message: Message dict with role, content, and optional metadata
+        use_collapsible_tools: If True, render tool calls in collapsible sections
+    """
     role = message["role"]
     content = message["content"]
 
@@ -315,9 +550,12 @@ def render_chat_message(message: dict) -> None:
                     meta.get("confidence_level", "UNKNOWN"),
                 )
 
-            # Tool calls
+            # Tool calls - use collapsible display by default
             if meta.get("tool_calls"):
-                render_tool_calls(meta["tool_calls"])
+                if use_collapsible_tools:
+                    render_tool_calls_collapsible(meta["tool_calls"])
+                else:
+                    render_tool_calls(meta["tool_calls"])
 
             # Verification status
             if not meta.get("verification_passed", True):
@@ -355,15 +593,30 @@ def process_message(prompt: str) -> None:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Get agent response
-    agent = get_agent()
-    if agent is None:
+    # Check backend health first
+    if not st.session_state.backend_healthy:
+        with st.chat_message("assistant"):
+            st.error("Backend Unavailable")
+            st.markdown(
+                """
+                The backend server is not responding. To fix this:
+
+                1. **Start the backend server:**
+                   ```
+                   uvicorn src.api.routes:app --reload
+                   ```
+                2. **Or from the project root:**
+                   ```
+                   python -m src.api.routes
+                   ```
+                3. **Check the backend URL:** Make sure `BACKEND_URL` environment variable is set correctly (default: `http://localhost:8001`)
+                """
+            )
         return
 
     with st.chat_message("assistant"):
         with st.spinner("Analyzing..."):
-            response = run_async_chat(
-                agent,
+            response = send_chat_message(
                 prompt,
                 st.session_state.session_id,
             )
@@ -380,10 +633,10 @@ def process_message(prompt: str) -> None:
         confidence_level = response.get("confidence_level", "VERY_LOW")
         render_confidence_indicator(confidence, confidence_level)
 
-        # Render tool calls
+        # Render tool calls in collapsible sections
         tool_calls = response.get("tool_calls", [])
         if tool_calls:
-            render_tool_calls(tool_calls)
+            render_tool_calls_collapsible(tool_calls)
 
         # Check verification
         if not response.get("verification_passed", True):
@@ -450,6 +703,127 @@ def try_extract_portfolio_data(message: str, query: str) -> None:
                 st.session_state.portfolio_performance = perf
         except ValueError:
             pass
+
+
+def run_mvp_evals() -> dict[str, Any] | None:
+    """Run MVP evals via subprocess and return report dict."""
+    import subprocess
+
+    results_dir = _project_root / "evals" / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    out_path = results_dir / "eval_report_streamlit.json"
+
+    try:
+        subprocess.run(
+            [
+                "python",
+                str(_project_root / "evals" / "run_evals.py"),
+                "--category",
+                "mvp",
+                "--save",
+                "--output",
+                str(out_path),
+            ],
+            cwd=str(_project_root),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if out_path.exists():
+            with open(out_path) as f:
+                import json
+                return json.load(f)
+    except Exception as e:
+        st.error(f"Eval run failed: {e}")
+    return None
+
+
+def render_eval_report(report: dict[str, Any]) -> None:
+    """Render eval report with per-case and per-criterion pass/fail plus tool visualization."""
+    summary = report.get("summary", {})
+    st.subheader("MVP Evaluation Report")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total", summary.get("total_tests", 0))
+    with col2:
+        st.metric("Passed", summary.get("passed", 0))
+    with col3:
+        st.metric("Pass Rate", f"{summary.get('pass_rate', 0):.1f}%")
+
+    st.divider()
+
+    results = report.get("results", [])
+    for r in results:
+        case_id = r.get("id", "?")
+        passed = r.get("passed", False)
+        input_text = r.get("input", "")[:60] + ("..." if len(r.get("input", "")) > 60 else "")
+        tool_calls = r.get("tool_calls", [])
+
+        status = "PASS" if passed else "FAIL"
+        status_color = "#28a745" if passed else "#dc3545"
+        with st.expander(f"[{status}] {case_id}: {input_text}", expanded=not passed):
+            st.markdown(f"**Input:** {r.get('input', '')}")
+            st.markdown(f"**Overall:** {status}")
+
+            # Tool call visualization
+            if tool_calls:
+                st.markdown("**Tools Called:**")
+                colors = {
+                    "portfolio_analysis": "#3498db",
+                    "risk_assessment": "#e74c3c",
+                    "market_data_lookup": "#2ecc71",
+                }
+                badges = ""
+                for t in tool_calls:
+                    color = colors.get(t, "#95a5a6")
+                    badges += f'<span style="background:{color};color:white;padding:2px 8px;border-radius:12px;font-size:12px;margin-right:4px;">{t}</span>'
+                st.markdown(badges, unsafe_allow_html=True)
+
+            # Per-criterion pass/fail
+            criteria = r.get("criteria_results", [])
+            if criteria:
+                st.markdown("**Criteria:**")
+                for c in criteria:
+                    c_status = "PASS" if c.get("passed") else "FAIL"
+                    c_color = "#28a745" if c.get("passed") else "#dc3545"
+                    st.markdown(f"- {c.get('id', '?')}: {c.get('description', '')} — **{c_status}**")
+                    if not c.get("passed") and c.get("expected"):
+                        st.caption(f"  Expected: {c.get('expected')}, Got: {c.get('actual')}")
+
+            if r.get("response"):
+                with st.expander("Response preview", expanded=False):
+                    st.text(r["response"][:500] + ("..." if len(r.get("response", "")) > 500 else ""))
+
+
+def render_eval_view() -> None:
+    """Render the MVP Evaluations view."""
+    st.header("MVP Evaluations")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Run MVP Evals", type="primary"):
+            with st.spinner("Running evals (this may take 1-2 minutes)..."):
+                report = run_mvp_evals()
+                if report:
+                    st.session_state.eval_report = report
+                    st.rerun()
+
+    with col2:
+        uploaded = st.file_uploader("Or load report JSON", type=["json"])
+        if uploaded:
+            import json
+            try:
+                report = json.load(uploaded)
+                st.session_state.eval_report = report
+                st.rerun()
+            except json.JSONDecodeError:
+                st.error("Invalid JSON file")
+
+    if st.session_state.eval_report:
+        st.divider()
+        render_eval_report(st.session_state.eval_report)
+    else:
+        st.info("Run MVP evals or load a report to see results.")
 
 
 def render_tools_overview() -> None:
@@ -533,7 +907,11 @@ def main() -> None:
     # Render sidebar
     render_sidebar()
 
-    # Main content area
+    if st.session_state.page == "Evaluations":
+        render_eval_view()
+        return
+
+    # Main content area (Chat)
     col1, col2 = st.columns([3, 1])
 
     with col1:
