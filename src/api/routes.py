@@ -73,14 +73,16 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS middleware - allow Railway frontends via regex
+_cors_kw: dict[str, Any] = {
+    "allow_origins": settings.cors_origins_list,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if settings.cors_origin_regex and settings.cors_origin_regex.strip():
+    _cors_kw["allow_origin_regex"] = settings.cors_origin_regex
+app.add_middleware(CORSMiddleware, **_cors_kw)
 
 
 # ============================================================================

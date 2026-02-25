@@ -52,12 +52,19 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str = Field(default="change-me-in-production", description="Secret key for sessions")
-    cors_origins: str = "http://localhost:3000,http://localhost:8501"
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:8501",
+        description="Comma-separated CORS origins. For Railway, add your frontend URL.",
+    )
+    cors_origin_regex: str | None = Field(
+        default="https://.*\\.up\\.railway\\.app",
+        description="Regex for dynamic origins (e.g. Railway). Set empty to disable.",
+    )
 
     @property
     def cors_origins_list(self) -> list[str]:
         """Parse CORS origins as a list."""
-        return [origin.strip() for origin in self.cors_origins.split(",")]
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def is_development(self) -> bool:

@@ -16,6 +16,7 @@ Or: uvicorn src.api.routes:app --reload
 """
 
 import os
+import ssl
 import sys
 from pathlib import Path
 import uuid
@@ -43,6 +44,8 @@ st.set_page_config(
 # For Railway: Set BACKEND_URL in environment
 # For local dev: Uses localhost:8001
 API_BASE_URL = os.environ.get("BACKEND_URL", "http://localhost:8001")
+# Set BACKEND_SSL_VERIFY=false only if backend uses self-signed cert (e.g. some proxies)
+_BACKEND_SSL_VERIFY = os.environ.get("BACKEND_SSL_VERIFY", "true").lower() not in ("false", "0", "no")
 
 # Constants
 CONFIDENCE_THRESHOLDS = {
@@ -99,14 +102,17 @@ def check_backend_health() -> tuple[bool, dict[str, Any] | None]:
         Tuple of (is_healthy, health_data)
     """
     try:
-        with httpx.Client(timeout=5.0) as client:
+        with httpx.Client(timeout=5.0, verify=_BACKEND_SSL_VERIFY) as client:
             response = client.get(f"{API_BASE_URL}/health")
             if response.status_code == 200:
                 try:
-                    return True, response.json()
-                except (ValueError, KeyError):
-                    # JSON parsing failed - backend returned invalid response
-                    return True, {"status": "ok", "warning": "Invalid health response format"}
+                    data = response.json()
+                    if isinstance(data, dict) and "status" in data:
+                        return True, data
+                    return True, {"status": "ok", "raw": data}
+                except (ValueError, TypeError):
+                    # Non-JSON or invalid structure - treat as connected but warn
+                    return True, {"status": "ok", "warning": "Health returned non-JSON"}
             # Non-200 status - backend is unhealthy
             return False, {"error": f"Backend returned status {response.status_code}"}
     except httpx.ConnectError:
@@ -134,13 +140,15 @@ def send_chat_message(message: str, session_id: str) -> dict[str, Any]:
         Response dict with message, confidence, tool_calls, etc.
     """
     try:
-        with httpx.Client(timeout=60.0) as client:
+        headers = {"User-Agent": "Ghostfolio-Agent-Frontend/1.0", "Accept": "application/json"}
+        with httpx.Client(timeout=60.0, verify=_BACKEND_SSL_VERIFY) as client:
             response = client.post(
                 f"{API_BASE_URL}/chat",
                 json={
                     "message": message,
                     "session_id": session_id,
                 },
+                headers=headers,
             )
 
             if response.status_code == 200:
@@ -205,16 +213,24 @@ def send_chat_message(message: str, session_id: str) -> dict[str, Any]:
                     "metadata": {"error": error_detail},
                 }
 
-    except httpx.ConnectError:
+    except httpx.ConnectError as e:
+        is_ssl = isinstance(getattr(e, "__cause__", None), ssl.SSLCertVerificationError)
         return {
-            "message": "Cannot connect to the backend server. Please ensure the FastAPI server is running.",
+            "message": (
+                "SSL certificate verification failed when connecting to the backend. "
+                "If using a self-signed cert, set BACKEND_SSL_VERIFY=false."
+                if is_ssl
+                else "Cannot connect to the backend server. Please ensure the FastAPI server is running."
+            ),
             "confidence": 0.0,
             "confidence_level": "VERY_LOW",
             "tool_calls": [],
             "verification_passed": False,
             "requires_escalation": True,
-            "escalation_triggers": ["Connection refused - backend not running"],
-            "metadata": {"error": "Connection refused"},
+            "escalation_triggers": [
+                "SSL certificate verify failed" if is_ssl else "Connection refused - backend not running"
+            ],
+            "metadata": {"error": "SSL verify failed" if is_ssl else "Connection refused"},
         }
     except httpx.TimeoutException:
         return {
