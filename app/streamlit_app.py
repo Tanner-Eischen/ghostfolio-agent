@@ -726,6 +726,11 @@ def run_mvp_evals() -> dict[str, Any] | None:
     """Run MVP evals via subprocess and return report dict."""
     import subprocess
 
+    run_evals_py = _project_root / "evals" / "run_evals.py"
+    if not run_evals_py.exists():
+        st.error("Eval runner not found (evals/run_evals.py). Evals are not available in this build.")
+        return None
+
     results_dir = _project_root / "evals" / "results"
     try:
         results_dir.mkdir(parents=True, exist_ok=True)
@@ -839,6 +844,8 @@ def render_eval_view() -> None:
                 if report:
                     st.session_state.eval_report = report
                     st.rerun()
+                else:
+                    st.warning("No report was generated. Evals may not be available in this deployment or the run failed. Try uploading a report JSON instead.")
 
     with col2:
         uploaded = st.file_uploader("Or load report JSON", type=["json"])

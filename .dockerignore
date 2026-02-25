@@ -53,8 +53,8 @@ scripts/
 *.log
 *.tmp
 
-# Evaluation files (not needed in production)
-evals/
+# Evaluation files (excluded from backend; frontend needs evals/ for Run MVP Evals)
+# evals/ — leave included so Streamlit frontend can run evals
 
 # Environment files (use docker-compose env vars instead)
 .env
