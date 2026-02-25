@@ -576,6 +576,10 @@ def save_report(report: EvalReport, output_path: str | None = None):
                 "passed": r.passed,
                 "response": r.response,
                 "tool_calls": r.tool_calls,
+                # Full tool call payloads (name + args) from agent response
+                "tool_call_details": r.details.get("tool_calls", []),
+                # Structured/raw tool outputs used by atomic field_present checks
+                "tool_outputs": r.details.get("tool_outputs", []),
                 "confidence": r.confidence,
                 "response_time_ms": r.response_time_ms,
                 "checks": r.checks,

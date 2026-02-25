@@ -779,6 +779,17 @@ def render_eval_report(report: dict[str, Any]) -> None:
                     badges += f'<span style="background:{color};color:white;padding:2px 8px;border-radius:12px;font-size:12px;margin-right:4px;">{t}</span>'
                 st.markdown(badges, unsafe_allow_html=True)
 
+            # Full JSON payloads for inspection/debugging
+            tool_call_details = r.get("tool_call_details", [])
+            if tool_call_details:
+                with st.expander("Tool call JSON", expanded=False):
+                    st.json(tool_call_details)
+
+            tool_outputs = r.get("tool_outputs", [])
+            if tool_outputs:
+                with st.expander("Tool output JSON", expanded=False):
+                    st.json(tool_outputs)
+
             # Per-criterion pass/fail
             criteria = r.get("criteria_results", [])
             if criteria:
