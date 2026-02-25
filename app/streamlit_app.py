@@ -18,6 +18,7 @@ Or: uvicorn src.api.routes:app --reload
 import os
 import ssl
 import sys
+import tempfile
 from pathlib import Path
 import uuid
 from typing import Any
@@ -726,7 +727,11 @@ def run_mvp_evals() -> dict[str, Any] | None:
     import subprocess
 
     results_dir = _project_root / "evals" / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        results_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        results_dir = Path(tempfile.gettempdir()) / "ghostfolio_agent_evals" / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
     out_path = results_dir / "eval_report_streamlit.json"
 
     try:
