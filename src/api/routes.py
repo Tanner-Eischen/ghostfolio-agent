@@ -1253,6 +1253,221 @@ async def get_module_dependencies(repo_id: str, module_name: str) -> Dependencie
 
 
 # ============================================================================
+# File Explorer & Code Preview Endpoints
+# ============================================================================
+
+
+class FileNode(BaseModel):
+    """A file or directory node in the file tree."""
+
+    name: str = Field(..., description="File or directory name")
+    path: str = Field(..., description="Relative path from repo root")
+    type: str = Field(..., description="file or directory")
+    children: list["FileNode"] | None = Field(default=None, description="Child nodes for directories")
+
+
+class FileTreeResponse(BaseModel):
+    """File tree response."""
+
+    root: FileNode = Field(..., description="Root node of the file tree")
+
+
+class InjectionPoint(BaseModel):
+    """A detected injection point in the code."""
+
+    file_path: str = Field(..., description="Path to the file")
+    line_number: int = Field(..., description="Starting line number")
+    code_snippet: list[str] = Field(..., description="Lines of code")
+    route_type: str = Field(..., description="HTTP method (get, post, etc.)")
+    route_path: str = Field(..., description="Route path")
+
+
+class InjectionPointsResponse(BaseModel):
+    """Detected injection points response."""
+
+    points: list[InjectionPoint] = Field(..., description="List of injection points")
+    total: int = Field(..., description="Total count")
+
+
+class CodebaseInsight(BaseModel):
+    """AI-generated codebase insight."""
+
+    summary: str = Field(..., description="Brief summary of the codebase")
+    entry_points: list[str] = Field(..., description="Suggested entry points for agent integration")
+    architecture: str = Field(..., description="Architecture pattern detected")
+    recommendations: list[str] = Field(..., description="Integration recommendations")
+
+
+@app.get("/repo/{repo_id}/files", response_model=FileTreeResponse, tags=["Repo"])
+async def get_repo_files(repo_id: str, max_depth: int = 3) -> FileTreeResponse:
+    """Get file tree for a connected repository.
+
+    Args:
+        repo_id: The connection ID
+        max_depth: Maximum depth to traverse (default 3)
+
+    Returns:
+        FileTreeResponse with nested file/directory structure
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+
+    if not repo_path:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    def build_tree(path: Path, depth: int = 0) -> FileNode:
+        name = path.name
+        rel_path = str(path.relative_to(repo_path))
+
+        if path.is_file():
+            return FileNode(name=name, path=rel_path, type="file")
+
+        children = None
+        if depth < max_depth:
+            children = []
+            # Skip hidden directories and common non-essential dirs
+            skip_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv", ".idea", ".vscode", "dist", "build"}
+            try:
+                for item in sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                    if item.name.startswith(".") or item.name in skip_dirs:
+                        continue
+                    if item.is_file() and not item.suffix in {".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml", ".md", ".toml"}:
+                        continue
+                    children.append(build_tree(item, depth + 1))
+            except PermissionError:
+                pass
+
+        return FileNode(name=name, path=rel_path, type="directory", children=children)
+
+    root = build_tree(repo_path)
+    return FileTreeResponse(root=root)
+
+
+@app.get("/repo/{repo_id}/injection-points", response_model=InjectionPointsResponse, tags=["Repo"])
+async def get_injection_points(repo_id: str, limit: int = 10) -> InjectionPointsResponse:
+    """Get detected injection points (API routes) for agent integration.
+
+    Scans for FastAPI, Flask, and similar route decorators.
+
+    Args:
+        repo_id: The connection ID
+        limit: Maximum number of points to return
+
+    Returns:
+        InjectionPointsResponse with detected route handlers
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+
+    if not repo_path:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    points = []
+    route_patterns = [
+        (r"@app\.(get|post|put|delete|patch)\s*\(\s*['\"]([^'\"]+)['\"]", "fastapi"),
+        (r"@router\.(get|post|put|delete|patch)\s*\(\s*['\"]([^'\"]+)['\"]", "fastapi"),
+        (r"@app\.route\s*\(\s*['\"]([^'\"]+)['\"]", "flask"),
+    ]
+
+    import re
+
+    for py_file in repo_path.rglob("*.py"):
+        if len(points) >= limit:
+            break
+        try:
+            content = py_file.read_text(encoding="utf-8")
+            lines = content.split("\n")
+            rel_path = str(py_file.relative_to(repo_path))
+
+            for i, line in enumerate(lines):
+                for pattern, framework in route_patterns:
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match:
+                        route_type = match.group(1).upper() if len(match.groups()) > 1 else "GET"
+                        route_path = match.group(2) if len(match.groups()) > 1 else match.group(1)
+
+                        # Get surrounding context
+                        start = max(0, i - 2)
+                        end = min(len(lines), i + 8)
+                        snippet = lines[start:end]
+
+                        points.append(InjectionPoint(
+                            file_path=rel_path,
+                            line_number=i + 1,
+                            code_snippet=snippet,
+                            route_type=route_type,
+                            route_path=route_path,
+                        ))
+                        if len(points) >= limit:
+                            break
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue
+
+    return InjectionPointsResponse(points=points, total=len(points))
+
+
+@app.get("/repo/{repo_id}/insights", response_model=CodebaseInsight, tags=["Repo"])
+async def get_codebase_insights(repo_id: str) -> CodebaseInsight:
+    """Get AI-generated codebase insights and integration recommendations.
+
+    Analyzes the repository structure and provides suggestions for
+    where and how to integrate an AI agent.
+
+    Args:
+        repo_id: The connection ID
+
+    Returns:
+        CodebaseInsight with analysis and recommendations
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+
+    if not repo_path:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    connection = manager.get_connection(repo_id)
+    repo_name = connection.name if connection else "Unknown"
+
+    # Analyze structure
+    modules = _detect_modules(target_path=repo_path)
+    endpoints = _count_endpoints_in_path(repo_path)
+
+    # Detect framework/architecture
+    has_fastapi = (repo_path / "fastapi").is_dir() or any(
+        "fastapi" in f.read_text(encoding="utf-8", errors="ignore").lower()
+        for f in repo_path.rglob("*.py")
+        if f.stat().st_size < 100000
+    ) if repo_path.exists() else False
+
+    # Generate insights based on analysis
+    if has_fastapi or "fastapi" in repo_name.lower():
+        architecture = "FastAPI Async Web Framework"
+        entry_points = ["fastapi/applications.py", "fastapi/routing.py"]
+        summary = f"FastAPI is a modern async web framework with {endpoints} detected routes and {len(modules)} modules."
+        recommendations = [
+            "Inject agent at FastAPI application startup via lifespan context",
+            "Add middleware for request/response interception",
+            "Use dependency injection for agent service integration",
+        ]
+    else:
+        architecture = "Python Package" if any(repo_path.rglob("*.py")) else "Unknown"
+        entry_points = modules[:3] if modules else ["(root)"]
+        summary = f"Repository with {len(modules)} modules and {endpoints} detected endpoints."
+        recommendations = [
+            "Analyze entry points for agent integration opportunities",
+            "Review module dependencies for optimal injection points",
+            "Consider adding agent service as a separate module",
+        ]
+
+    return CodebaseInsight(
+        summary=summary,
+        entry_points=entry_points,
+        architecture=architecture,
+        recommendations=recommendations,
+    )
+
+
+# ============================================================================
 # Strategy Endpoints (Page 2 - Strategy)
 # ============================================================================
 

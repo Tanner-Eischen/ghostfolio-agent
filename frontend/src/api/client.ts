@@ -193,6 +193,50 @@ export const repoApi = {
   // Drill-down into a specific module
   getModuleDependencies: (repoId: string, moduleName: string) =>
     fetchApi<DependenciesGraph>(`/repo/${repoId}/dependencies/${moduleName}`),
+
+  // File explorer and code preview
+  getFiles: (repoId: string, maxDepth?: number) =>
+    fetchApi<FileTreeResponse>(`/repo/${repoId}/files${maxDepth ? `?max_depth=${maxDepth}` : ''}`),
+  getInjectionPoints: (repoId: string, limit?: number) =>
+    fetchApi<InjectionPointsResponse>(`/repo/${repoId}/injection-points${limit ? `?limit=${limit}` : ''}`),
+  getInsights: (repoId: string) =>
+    fetchApi<CodebaseInsight>(`/repo/${repoId}/insights`),
+};
+
+// File Explorer types
+export interface FileNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: FileNode[];
+}
+
+export interface FileTreeResponse {
+  root: FileNode;
+}
+
+// Injection Points types
+export interface InjectionPoint {
+  file_path: string;
+  line_number: number;
+  code_snippet: string[];
+  route_type: string;
+  route_path: string;
+}
+
+export interface InjectionPointsResponse {
+  points: InjectionPoint[];
+  total: number;
+}
+
+// Codebase Insights types
+export interface CodebaseInsight {
+  summary: string;
+  entry_points: string[];
+  architecture: string;
+  recommendations: string[];
+}
+    fetchApi<DependenciesGraph>(`/repo/${repoId}/dependencies/${moduleName}`),
 };
 
 // Strategy API (new)

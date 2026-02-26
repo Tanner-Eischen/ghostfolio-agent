@@ -1,19 +1,18 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { healthApi, repoApi } from '../api/client';
-import type { HealthResponse, RepoInfo, DependenciesGraph, RepoConnection } from '../api/client';
+import type {
+  HealthResponse,
+  RepoInfo,
+  DependenciesGraph,
+  RepoConnection,
+  FileNode,
+  InjectionPoint,
+  CodebaseInsight,
+} from '../api/client';
 import { Sidebar } from '../components/layout/Sidebar';
 import { RepoConnector } from '../components/RepoConnector';
 
 type MapMode = 'full' | 'services';
-
-const NODE_POSITIONS: Record<string, { x: number; y: number }> = {
-  'agent-core': { x: 200, y: 150 },
-  'database': { x: 80, y: 60 },
-  'auth-service': { x: 320, y: 60 },
-  'module-tools': { x: 80, y: 240 },
-  'module-verification': { x: 320, y: 240 },
-  'module-api': { x: 200, y: 280 },
-};
 
 const COLOR_MAP: Record<string, { bg: string; border: string; text: string }> = {
   primary: { bg: 'rgba(6, 182, 212, 0.1)', border: '#06b6d4', text: '#06b6d4' },
@@ -22,16 +21,96 @@ const COLOR_MAP: Record<string, { bg: string; border: string; text: string }> = 
   slate: { bg: 'rgba(100, 116, 139, 0.1)', border: '#64748b', text: '#f1f5f9' },
 };
 
+// Calculate dynamic node positions in a circular layout
+function calculateNodePositions(nodes: DependenciesGraph['nodes']): Record<string, { x: number; y: number }> {
+  const positions: Record<string, { x: number; y: number }> = {};
+  const centerX = 200;
+  const centerY = 170;
+  const radius = 120;
+
+  nodes.forEach((node, i) => {
+    const angle = (2 * Math.PI * i) / nodes.length - Math.PI / 2;
+    positions[node.id] = {
+      x: Math.round(centerX + radius * Math.cos(angle)),
+      y: Math.round(centerY + radius * Math.sin(angle)),
+    };
+  });
+
+  return positions;
+}
+
+// File tree item component
+function FileTreeItem({ node, depth = 0, selectedPath, onSelect }: {
+  node: FileNode;
+  depth?: number;
+  selectedPath: string | null;
+  onSelect: (node: FileNode) => void;
+}) {
+  const [expanded, setExpanded] = useState(depth < 2);
+  const isDirectory = node.type === 'directory';
+  const isSelected = selectedPath === node.path;
+
+  const getIcon = () => {
+    if (isDirectory) return expanded ? 'folder_open' : 'folder';
+    if (node.name.endsWith('.py')) return 'terminal';
+    if (node.name.endsWith('.ts') || node.name.endsWith('.tsx')) return 'javascript';
+    if (node.name.endsWith('.json')) return 'data_object';
+    return 'description';
+  };
+
+  return (
+    <div>
+      <div
+        className={`group flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${
+          isSelected
+            ? 'bg-primary/10 border border-primary/20 text-primary'
+            : 'hover:bg-surface-dark text-slate-300'
+        }`}
+        style={{ paddingLeft: `${depth * 12 + 8}px` }}
+        onClick={() => {
+          if (isDirectory) setExpanded(!expanded);
+          else onSelect(node);
+        }}
+      >
+        <span className="material-symbols-outlined text-slate-400 text-lg">{getIcon()}</span>
+        <span className="truncate">{node.name}</span>
+        {isDirectory && node.children && (
+          <span className="text-xs text-slate-500 ml-auto">{node.children.length}</span>
+        )}
+        {isSelected && <span className="size-2 rounded-full bg-primary animate-pulse ml-auto" />}
+      </div>
+      {isDirectory && expanded && node.children && (
+        <div className="relative">
+          {depth < 2 && <div className="absolute left-3 top-0 bottom-0 w-px bg-slate-700" />}
+          {node.children.map((child) => (
+            <FileTreeItem
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Dashboard() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [repo, setRepo] = useState<RepoInfo | null>(null);
   const [dependencies, setDependencies] = useState<DependenciesGraph | null>(null);
+  const [fileTree, setFileTree] = useState<FileNode | null>(null);
+  const [injectionPoints, setInjectionPoints] = useState<InjectionPoint[]>([]);
+  const [insights, setInsights] = useState<CodebaseInsight | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapMode, setMapMode] = useState<MapMode>('full');
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   // Repo connection state
@@ -44,13 +123,19 @@ export function Dashboard() {
       setHealth(healthData);
 
       if (connectedRepo) {
-        // Fetch data from connected repo
-        const [repoData, depsData] = await Promise.all([
+        // Fetch all data from connected repo
+        const [repoData, depsData, filesData, pointsData, insightsData] = await Promise.all([
           repoApi.getConnected(connectedRepo.id).catch(() => null),
           repoApi.getConnectedDependencies(connectedRepo.id).catch(() => null),
+          repoApi.getFiles(connectedRepo.id, 2).catch(() => null),
+          repoApi.getInjectionPoints(connectedRepo.id, 5).catch(() => null),
+          repoApi.getInsights(connectedRepo.id).catch(() => null),
         ]);
         setRepo(repoData);
         setDependencies(depsData);
+        if (filesData?.root) setFileTree(filesData.root);
+        if (pointsData?.points) setInjectionPoints(pointsData.points);
+        if (insightsData) setInsights(insightsData);
       } else {
         // Use ghostfolio-agent's own repo as fallback
         const [repoData, depsData] = await Promise.all([
@@ -59,6 +144,9 @@ export function Dashboard() {
         ]);
         setRepo(repoData);
         setDependencies(depsData);
+        setFileTree(null);
+        setInjectionPoints([]);
+        setInsights(null);
       }
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
@@ -72,7 +160,6 @@ export function Dashboard() {
     async function loadConnections() {
       try {
         const response = await repoApi.listConnections();
-        // Auto-connect to the first connection if any exist
         if (response.connections && response.connections.length > 0) {
           setConnectedRepo(response.connections[0]);
         }
@@ -91,13 +178,18 @@ export function Dashboard() {
   const handleConnected = (connection: RepoConnection) => {
     setConnectedRepo(connection);
     setLoading(true);
+    setSelectedFile(null);
   };
 
   const handleDisconnect = () => {
     setConnectedRepo(null);
     setRepo(null);
     setDependencies(null);
+    setFileTree(null);
+    setInjectionPoints([]);
+    setInsights(null);
     setLoading(true);
+    setSelectedFile(null);
   };
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -117,10 +209,6 @@ export function Dashboard() {
   const handleZoomIn = () => setZoom(z => Math.min(z + 0.2, 2));
   const handleZoomOut = () => setZoom(z => Math.max(z - 0.2, 0.5));
 
-  const getNodePosition = (nodeId: string): { x: number; y: number } => {
-    return NODE_POSITIONS[nodeId] || { x: 200, y: 150 };
-  };
-
   const filteredNodes = dependencies?.nodes.filter(node => {
     if (mapMode === 'services') {
       return node.type !== 'database';
@@ -133,6 +221,13 @@ export function Dashboard() {
     filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target)
   ) || [];
 
+  // Calculate node positions dynamically
+  const nodePositions = calculateNodePositions(filteredNodes);
+
+  const getNodePosition = (nodeId: string): { x: number; y: number } => {
+    return nodePositions[nodeId] || { x: 200, y: 170 };
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -144,33 +239,17 @@ export function Dashboard() {
   return (
     <div className="flex h-full">
       <Sidebar title="File Explorer">
-        <div className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-dark cursor-pointer text-slate-300">
-          <span className="material-symbols-outlined text-slate-400 text-lg">folder_open</span>
-          <span>src</span>
-        </div>
-        <div className="pl-4 relative tree-line">
-          <div className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-dark cursor-pointer text-slate-300">
-            <span className="material-symbols-outlined text-slate-400 text-lg">folder</span>
-            <span>api</span>
+        {fileTree ? (
+          <FileTreeItem
+            node={fileTree}
+            selectedPath={selectedFile?.path || null}
+            onSelect={setSelectedFile}
+          />
+        ) : (
+          <div className="text-slate-500 text-sm px-2 py-4">
+            {connectedRepo ? 'Loading files...' : 'Connect a repository to view files'}
           </div>
-          <div className="pl-4 relative tree-line">
-            <div className="group flex items-center justify-between px-2 py-1.5 rounded bg-primary/10 border border-primary/20 cursor-pointer text-primary">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-lg">javascript</span>
-                <span>routes.py</span>
-              </div>
-              <span className="size-2 rounded-full bg-primary animate-pulse" />
-            </div>
-          </div>
-          <div className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-dark cursor-pointer text-slate-300">
-            <span className="material-symbols-outlined text-slate-400 text-lg">folder</span>
-            <span>agent</span>
-          </div>
-          <div className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-dark cursor-pointer text-slate-300">
-            <span className="material-symbols-outlined text-slate-400 text-lg">folder</span>
-            <span>tools</span>
-          </div>
-        </div>
+        )}
       </Sidebar>
 
       <main className="flex-1 flex flex-col bg-background-dark overflow-y-auto">
@@ -205,15 +284,15 @@ export function Dashboard() {
             <h1 className="text-2xl font-bold text-white">Codebase Analysis & Mapping</h1>
           </div>
           <div className="flex gap-3">
-            {health?.dependencies && (
+            {repo && (
               <>
                 <span className="px-3 py-1 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 text-xs font-medium flex items-center gap-1">
                   <span className="material-symbols-outlined text-sm">check_circle</span>
-                  {repo?.endpoints || 12} Endpoints
+                  {repo.endpoints} Endpoints
                 </span>
                 <span className="px-3 py-1 rounded-full border border-surface-border bg-surface-dark text-slate-400 text-xs font-medium flex items-center gap-1">
                   <span className="material-symbols-outlined text-sm">account_tree</span>
-                  {repo?.services || 3} Service Links
+                  {repo.services} Modules
                 </span>
               </>
             )}
@@ -230,312 +309,308 @@ export function Dashboard() {
           />
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {/* Structural Breakdown */}
-          <div className="flex flex-col gap-4">
-            <div className="bg-surface-dark border border-surface-border rounded-xl p-4 flex justify-between items-center shadow-sm">
-              <div className="flex items-center gap-4">
-                <div className="p-3 rounded-lg bg-indigo-500/20 text-indigo-400">
-                  <span className="material-symbols-outlined text-2xl">schema</span>
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-100">Structural Breakdown</h3>
-                  <div className="flex gap-4 mt-1">
-                    <span className="text-xs text-slate-400">
-                      Total Routes: <span className="text-white font-mono">{repo?.endpoints || 24}</span>
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      Detected Services: <span className="text-white font-mono">{repo?.services || 8}</span>
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      Tool Hooks: <span className="text-primary font-mono">{repo?.tool_hooks || 5}</span>
-                    </span>
+            {/* Structural Breakdown */}
+            <div className="flex flex-col gap-4">
+              <div className="bg-surface-dark border border-surface-border rounded-xl p-4 flex justify-between items-center shadow-sm">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 rounded-lg bg-indigo-500/20 text-indigo-400">
+                    <span className="material-symbols-outlined text-2xl">schema</span>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">Structural Breakdown</h3>
+                    <div className="flex gap-4 mt-1">
+                      <span className="text-xs text-slate-400">
+                        Total Routes: <span className="text-white font-mono">{repo?.endpoints || 0}</span>
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        Detected Modules: <span className="text-white font-mono">{repo?.services || 0}</span>
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        Tool Hooks: <span className="text-primary font-mono">{repo?.tool_hooks || 0}</span>
+                      </span>
+                    </div>
                   </div>
                 </div>
+                <button className="text-xs text-slate-400 hover:text-white border border-surface-border rounded px-3 py-1.5 transition-colors">
+                  View Report
+                </button>
               </div>
-              <button className="text-xs text-slate-400 hover:text-white border border-surface-border rounded px-3 py-1.5 transition-colors">
-                View Report
-              </button>
-            </div>
 
-            {/* Code Preview */}
-            <div className="bg-surface-darker rounded-xl border border-surface-border overflow-hidden shadow-sm flex-1 min-h-[400px]">
-              <div className="flex items-center justify-between px-4 py-2 bg-surface-dark border-b border-surface-border">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                    Detected Injection Points
-                  </span>
-                  <span className="bg-primary/20 text-primary text-[10px] px-1.5 rounded">3 Found</span>
-                </div>
-              </div>
-              <div className="p-4 font-mono text-sm leading-6 text-slate-400 overflow-x-auto">
-                <div className="flex">
-                  <span className="w-8 text-slate-500 select-none">14</span>
-                  <span>@Controller('api')</span>
-                </div>
-                <div className="flex">
-                  <span className="w-8 text-slate-500 select-none">15</span>
-                  <span>export class AppController {'{'}</span>
-                </div>
-                <div className="relative group my-2">
-                  <div className="absolute inset-0 bg-primary/10 border-l-2 border-primary -ml-4 w-[calc(100%+2rem)]" />
-                  <div className="relative flex text-primary">
-                    <span className="w-8 text-primary/50 select-none">+</span>
-                    <span>  @Post('agent/query')</span>
+              {/* Code Preview - Injection Points */}
+              <div className="bg-surface-darker rounded-xl border border-surface-border overflow-hidden shadow-sm flex-1 min-h-[400px]">
+                <div className="flex items-center justify-between px-4 py-2 bg-surface-dark border-b border-surface-border">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                      Detected Injection Points
+                    </span>
+                    <span className="bg-primary/20 text-primary text-[10px] px-1.5 rounded">
+                      {injectionPoints.length} Found
+                    </span>
                   </div>
-                  <div className="relative flex text-primary">
-                    <span className="w-8 text-primary/50 select-none">+</span>
-                    <span>  async handleAgentQuery(@Body() query: AgentDto) {'{'}</span>
-                  </div>
-                  <div className="relative flex text-primary">
-                    <span className="w-8 text-primary/50 select-none">+</span>
-                    <span>    return this.agentService.process(query);</span>
-                  </div>
-                  <div className="relative flex text-primary">
-                    <span className="w-8 text-primary/50 select-none">+</span>
-                    <span>  {'}'}</span>
-                  </div>
+                  {injectionPoints.length > 0 && (
+                    <span className="text-xs text-slate-500">{injectionPoints[0]?.file_path}</span>
+                  )}
                 </div>
-                <div className="flex">
-                  <span className="w-8 text-slate-500 select-none">21</span>
-                  <span>{'}'}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Insight Panel */}
-          <div className="flex flex-col gap-6">
-            <div className="p-5 rounded-xl bg-gradient-to-br from-surface-dark to-surface-darker border border-primary/30 shadow-lg relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 blur-[50px] rounded-full pointer-events-none" />
-              <div className="flex items-start gap-4">
-                <div className="p-2 rounded-lg bg-primary/20 text-primary">
-                  <span className="material-symbols-outlined text-2xl">auto_fix_high</span>
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-white mb-1">Codebase Insight</h3>
-                  <p className="text-sm text-slate-400 leading-relaxed mb-4">
-                    I've mapped the full dependency tree. The <code className="text-primary">AppController</code> is
-                    the optimal entry point as it sits upstream of <code className="text-primary">UserService</code>{' '}
-                    and <code className="text-primary">PortfolioService</code>. Injecting here minimizes latency for
-                    AI-driven portfolio queries.
-                  </p>
-                  <div className="flex gap-3">
-                    <button className="text-xs font-medium bg-primary text-surface-darker px-3 py-1.5 rounded hover:bg-cyan-400 transition-colors">
-                      Accept Mapping
-                    </button>
-                    <button className="text-xs font-medium text-slate-400 hover:text-white px-3 py-1.5 transition-colors">
-                      View Alternatives
-                    </button>
-                  </div>
+                <div className="p-4 font-mono text-sm leading-6 text-slate-400 overflow-x-auto">
+                  {injectionPoints.length > 0 ? (
+                    injectionPoints.slice(0, 3).map((point, idx) => (
+                      <div key={idx} className="mb-4">
+                        <div className="text-xs text-slate-500 mb-1">
+                          {point.route_type} {point.route_path}
+                        </div>
+                        {point.code_snippet.map((line, lineIdx) => (
+                          <div key={lineIdx} className="flex">
+                            <span className="w-8 text-slate-500 select-none">{point.line_number + lineIdx - 2}</span>
+                            <span className={lineIdx >= 2 && lineIdx <= 5 ? 'text-primary' : ''}>{line}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-slate-500">
+                      {connectedRepo ? 'Scanning for injection points...' : 'Connect a repository to detect injection points'}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* Health Status */}
-            <div className="bg-surface-dark rounded-xl border border-surface-border p-4">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">System Health</h4>
-              <div className="space-y-2">
-                {health?.dependencies && Object.entries(health.dependencies).map(([key, value]) => (
-                  <div key={key} className="flex items-center justify-between">
-                    <span className="text-sm text-white capitalize">{key.replace(/_/g, ' ')}</span>
-                    <span className={`flex items-center gap-1.5 text-xs font-medium ${
-                      value ? 'text-emerald-400' : 'text-red-400'
-                    }`}>
-                      <span className={`h-2 w-2 rounded-full ${value ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`} />
-                      {value ? 'Operational' : 'Unavailable'}
-                    </span>
+            {/* Insight Panel */}
+            <div className="flex flex-col gap-6">
+              <div className="p-5 rounded-xl bg-gradient-to-br from-surface-dark to-surface-darker border border-primary/30 shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 blur-[50px] rounded-full pointer-events-none" />
+                <div className="flex items-start gap-4">
+                  <div className="p-2 rounded-lg bg-primary/20 text-primary">
+                    <span className="material-symbols-outlined text-2xl">auto_fix_high</span>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Dependency Mapper */}
-            <div className="flex-1 rounded-xl bg-surface-dark border border-surface-border flex flex-col overflow-hidden min-h-[300px]">
-              <div className="px-5 py-3 border-b border-surface-border flex justify-between items-center bg-surface-darker">
-                <h3 className="text-sm font-semibold text-slate-300">Dependency Mapper</h3>
-                <div className="flex gap-2">
-                  <span className="size-2 rounded-full bg-primary" />
-                  <span className="text-xs text-slate-500">Agent</span>
-                  <span className="size-2 rounded-full bg-indigo-400 ml-2" />
-                  <span className="text-xs text-slate-500">Services</span>
-                  <span className="size-2 rounded-full bg-emerald-400 ml-2" />
-                  <span className="text-xs text-slate-500">Database</span>
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">Codebase Insight</h3>
+                    <p className="text-sm text-slate-400 leading-relaxed mb-4">
+                      {insights?.summary || (connectedRepo
+                        ? 'Analyzing codebase structure...'
+                        : 'Connect a repository to get AI-powered insights')}
+                    </p>
+                    {insights?.entry_points && insights.entry_points.length > 0 && (
+                      <div className="mb-3">
+                        <span className="text-xs text-slate-500">Entry Points: </span>
+                        {insights.entry_points.map((ep, i) => (
+                          <code key={i} className="text-primary text-xs mr-2">{ep}</code>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-3">
+                      <button className="text-xs font-medium bg-primary text-surface-darker px-3 py-1.5 rounded hover:bg-cyan-400 transition-colors">
+                        Accept Mapping
+                      </button>
+                      <button className="text-xs font-medium text-slate-400 hover:text-white px-3 py-1.5 transition-colors">
+                        View Alternatives
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* SVG Graph Container */}
-              <div
-                className="relative flex-1 overflow-hidden cursor-grab active:cursor-grabbing"
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-              >
-                <svg
-                  ref={svgRef}
-                  className="w-full h-full"
-                  viewBox="0 0 400 340"
-                  style={{
-                    transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
-                    transformOrigin: 'center',
-                  }}
+              {/* Health Status */}
+              <div className="bg-surface-dark rounded-xl border border-surface-border p-4">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">System Health</h4>
+                <div className="space-y-2">
+                  {health?.dependencies && Object.entries(health.dependencies).map(([key, value]) => (
+                    <div key={key} className="flex items-center justify-between">
+                      <span className="text-sm text-white capitalize">{key.replace(/_/g, ' ')}</span>
+                      <span className={`flex items-center gap-1.5 text-xs font-medium ${
+                        value ? 'text-emerald-400' : 'text-red-400'
+                      }`}>
+                        <span className={`h-2 w-2 rounded-full ${value ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`} />
+                        {value ? 'Operational' : 'Unavailable'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dependency Mapper */}
+              <div className="flex-1 rounded-xl bg-surface-dark border border-surface-border flex flex-col overflow-hidden min-h-[300px]">
+                <div className="px-5 py-3 border-b border-surface-border flex justify-between items-center bg-surface-darker">
+                  <h3 className="text-sm font-semibold text-slate-300">Dependency Mapper</h3>
+                  <div className="flex gap-2">
+                    <span className="size-2 rounded-full bg-primary" />
+                    <span className="text-xs text-slate-500">Agent</span>
+                    <span className="size-2 rounded-full bg-indigo-400 ml-2" />
+                    <span className="text-xs text-slate-500">Services</span>
+                    <span className="size-2 rounded-full bg-emerald-400 ml-2" />
+                    <span className="text-xs text-slate-500">Database</span>
+                  </div>
+                </div>
+
+                {/* SVG Graph Container */}
+                <div
+                  className="relative flex-1 overflow-hidden cursor-grab active:cursor-grabbing"
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseUp}
                 >
-                  {/* Background grid pattern */}
-                  <defs>
-                    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(100,116,139,0.1)" strokeWidth="0.5"/>
-                    </pattern>
-                    <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
-                      <stop offset="0%" stopColor="rgba(6,182,212,0.1)" />
-                      <stop offset="100%" stopColor="transparent" />
-                    </radialGradient>
-                  </defs>
-                  <rect width="100%" height="100%" fill="url(#grid)" />
-                  <circle cx="200" cy="150" r="120" fill="url(#centerGlow)" />
+                  <svg
+                    ref={svgRef}
+                    className="w-full h-full"
+                    viewBox="0 0 400 340"
+                    style={{
+                      transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+                      transformOrigin: 'center',
+                    }}
+                  >
+                    {/* Background grid pattern */}
+                    <defs>
+                      <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                        <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(100,116,139,0.1)" strokeWidth="0.5"/>
+                      </pattern>
+                      <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" stopColor="rgba(6,182,212,0.1)" />
+                        <stop offset="100%" stopColor="transparent" />
+                      </radialGradient>
+                    </defs>
+                    <rect width="100%" height="100%" fill="url(#grid)" />
+                    <circle cx="200" cy="170" r="140" fill="url(#centerGlow)" />
 
-                  {/* Edges (connections) */}
-                  {filteredEdges.map((edge, i) => {
-                    const source = getNodePosition(edge.source);
-                    const target = getNodePosition(edge.target);
-                    return (
-                      <g key={i}>
-                        <line
-                          x1={source.x}
-                          y1={source.y}
-                          x2={target.x}
-                          y2={target.y}
-                          stroke="rgba(100,116,139,0.4)"
-                          strokeWidth="2"
-                          strokeDasharray="4 4"
-                          className="animate-pulse"
-                        />
-                        {edge.label && (
+                    {/* Edges (connections) */}
+                    {filteredEdges.map((edge, i) => {
+                      const source = getNodePosition(edge.source);
+                      const target = getNodePosition(edge.target);
+                      return (
+                        <g key={i}>
+                          <line
+                            x1={source.x}
+                            y1={source.y}
+                            x2={target.x}
+                            y2={target.y}
+                            stroke="rgba(100,116,139,0.4)"
+                            strokeWidth="2"
+                            strokeDasharray="4 4"
+                            className="animate-pulse"
+                          />
+                          {edge.label && (
+                            <text
+                              x={(source.x + target.x) / 2}
+                              y={(source.y + target.y) / 2 - 8}
+                              fill="rgba(148,163,184,0.6)"
+                              fontSize="8"
+                              textAnchor="middle"
+                            >
+                              {edge.label}
+                            </text>
+                          )}
+                        </g>
+                      );
+                    })}
+
+                    {/* Nodes */}
+                    {filteredNodes.map((node) => {
+                      const pos = getNodePosition(node.id);
+                      const colors = COLOR_MAP[node.color] || COLOR_MAP.slate;
+                      const isAgent = node.type === 'agent';
+                      const size = isAgent ? 40 : 28;
+
+                      return (
+                        <g key={node.id} className="cursor-pointer hover:opacity-80 transition-opacity">
+                          {/* Node circle */}
+                          <circle
+                            cx={pos.x}
+                            cy={pos.y}
+                            r={size}
+                            fill={colors.bg}
+                            stroke={colors.border}
+                            strokeWidth={isAgent ? 3 : 2}
+                            className={isAgent ? 'animate-pulse' : ''}
+                          />
+                          {/* Icon */}
                           <text
-                            x={(source.x + target.x) / 2}
-                            y={(source.y + target.y) / 2 - 8}
-                            fill="rgba(148,163,184,0.6)"
-                            fontSize="8"
+                            x={pos.x}
+                            y={pos.y + 5}
+                            fill={colors.text}
+                            fontSize={isAgent ? 24 : 16}
+                            textAnchor="middle"
+                            fontFamily="Material Symbols Outlined"
+                          >
+                            {node.icon}
+                          </text>
+                          {/* Label */}
+                          <text
+                            x={pos.x}
+                            y={pos.y + size + 16}
+                            fill={colors.text}
+                            fontSize="10"
+                            fontWeight="bold"
                             textAnchor="middle"
                           >
-                            {edge.label}
+                            {node.name}
                           </text>
-                        )}
-                      </g>
-                    );
-                  })}
+                        </g>
+                      );
+                    })}
+                  </svg>
 
-                  {/* Nodes */}
-                  {filteredNodes.map((node) => {
-                    const pos = getNodePosition(node.id);
-                    const colors = COLOR_MAP[node.color] || COLOR_MAP.slate;
-                    const isAgent = node.type === 'agent';
-                    const size = isAgent ? 40 : 28;
-
-                    return (
-                      <g key={node.id} className="cursor-pointer hover:opacity-80 transition-opacity">
-                        {/* Node circle */}
-                        <circle
-                          cx={pos.x}
-                          cy={pos.y}
-                          r={size}
-                          fill={colors.bg}
-                          stroke={colors.border}
-                          strokeWidth={isAgent ? 3 : 2}
-                          className={isAgent ? 'animate-pulse' : ''}
-                        />
-                        {/* Icon */}
-                        <text
-                          x={pos.x}
-                          y={pos.y + 5}
-                          fill={colors.text}
-                          fontSize={isAgent ? 24 : 16}
-                          textAnchor="middle"
-                          fontFamily="Material Symbols Outlined"
-                        >
-                          {node.icon}
-                        </text>
-                        {/* Label */}
-                        <text
-                          x={pos.x}
-                          y={pos.y + size + 16}
-                          fill={colors.text}
-                          fontSize="10"
-                          fontWeight="bold"
-                          textAnchor="middle"
-                        >
-                          {node.name}
-                        </text>
-                      </g>
-                    );
-                  })}
-                </svg>
-
-                {/* Loading state */}
-                {!dependencies && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-surface-dark/50">
-                    <span className="text-slate-400 text-sm">Loading dependencies...</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Footer with controls */}
-              <div className="px-4 py-2 border-t border-surface-border bg-surface-darker flex justify-between items-center">
-                <div className="flex items-center gap-4">
-                  <span className="text-xs text-slate-500">Map Mode:</span>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => setMapMode('full')}
-                      className={`px-2 py-1 text-xs rounded transition-colors ${
-                        mapMode === 'full'
-                          ? 'bg-primary/20 text-primary border border-primary/30'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Full Architecture
-                    </button>
-                    <button
-                      onClick={() => setMapMode('services')}
-                      className={`px-2 py-1 text-xs rounded transition-colors ${
-                        mapMode === 'services'
-                          ? 'bg-primary/20 text-primary border border-primary/30'
-                          : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Services Only
-                    </button>
-                  </div>
+                  {/* Loading state */}
+                  {!dependencies && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-surface-dark/50">
+                      <span className="text-slate-400 text-sm">
+                        {connectedRepo ? 'Mapping dependencies...' : 'Connect a repository to view dependencies'}
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-500">Zoom: {Math.round(zoom * 100)}%</span>
-                  <button
-                    onClick={handleZoomOut}
-                    className="p-1 text-slate-400 hover:text-white border border-surface-border rounded transition-colors"
-                  >
-                    <span className="material-symbols-outlined text-sm">remove</span>
-                  </button>
-                  <button
-                    onClick={handleZoomIn}
-                    className="p-1 text-slate-400 hover:text-white border border-surface-border rounded transition-colors"
-                  >
-                    <span className="material-symbols-outlined text-sm">add</span>
-                  </button>
-                  <button
-                    onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
-                    className="p-1 text-slate-400 hover:text-white border border-surface-border rounded transition-colors"
-                    title="Reset view"
-                  >
-                    <span className="material-symbols-outlined text-sm">center_focus_strong</span>
-                  </button>
-                  <button
-                    className="p-1 text-slate-400 hover:text-white border border-surface-border rounded transition-colors"
-                    title="Expand"
-                  >
-                    <span className="material-symbols-outlined text-sm">open_in_full</span>
-                  </button>
+
+                {/* Footer with controls */}
+                <div className="px-4 py-2 border-t border-surface-border bg-surface-darker flex justify-between items-center">
+                  <div className="flex items-center gap-4">
+                    <span className="text-xs text-slate-500">Map Mode:</span>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => setMapMode('full')}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${
+                          mapMode === 'full'
+                            ? 'bg-primary/20 text-primary border border-primary/30'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Full Architecture
+                      </button>
+                      <button
+                        onClick={() => setMapMode('services')}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${
+                          mapMode === 'services'
+                            ? 'bg-primary/20 text-primary border border-primary/30'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Services Only
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-500">Zoom: {Math.round(zoom * 100)}%</span>
+                    <button
+                      onClick={handleZoomOut}
+                      className="p-1 text-slate-400 hover:text-white border border-surface-border rounded transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-sm">remove</span>
+                    </button>
+                    <button
+                      onClick={handleZoomIn}
+                      className="p-1 text-slate-400 hover:text-white border border-surface-border rounded transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-sm">add</span>
+                    </button>
+                    <button
+                      onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+                      className="p-1 text-slate-400 hover:text-white border border-surface-border rounded transition-colors"
+                      title="Reset view"
+                    >
+                      <span className="material-symbols-outlined text-sm">center_focus_strong</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
           </div>
         </div>
       </main>
