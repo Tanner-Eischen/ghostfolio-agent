@@ -189,6 +189,10 @@ export const repoApi = {
     fetchApi<RepoInfo>(`/repo/${repoId}`),
   getConnectedDependencies: (repoId: string) =>
     fetchApi<DependenciesGraph>(`/repo/${repoId}/dependencies`),
+
+  // Drill-down into a specific module
+  getModuleDependencies: (repoId: string, moduleName: string) =>
+    fetchApi<DependenciesGraph>(`/repo/${repoId}/dependencies/${moduleName}`),
 };
 
 // Strategy API (new)

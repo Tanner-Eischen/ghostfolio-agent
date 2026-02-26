@@ -50,10 +50,15 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 300
     redis_url: str | None = None
 
+    # Repository Configuration (for dashboard)
+    repo_url: str = Field(default="", description="Repository URL (e.g., https://github.com/user/repo)")
+    repo_name: str = Field(default="", description="Repository name (e.g., user/repo)")
+    repo_branch: str = Field(default="", description="Current branch name")
+
     # Security
     secret_key: str = Field(default="change-me-in-production", description="Secret key for sessions")
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:8501",
+        default="http://localhost:3000,http://localhost:5173,http://localhost:8501",
         description="Comma-separated CORS origins. For Railway, add your frontend URL.",
     )
     cors_origin_regex: str | None = Field(

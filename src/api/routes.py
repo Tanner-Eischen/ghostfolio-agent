@@ -760,12 +760,13 @@ async def get_connected_repo_info(repo_id: str) -> RepoInfoResponse:
 # ============================================================================
 
 
-def _analyze_python_imports(file_path: Path, target_path: Path | None = None) -> set[str]:
+def _analyze_python_imports(file_path: Path, target_path: Path | None = None, known_modules: list[str] | None = None) -> set[str]:
     """Extract internal module imports from a Python file using AST.
 
     Args:
         file_path: Path to Python file
         target_path: Root path of the target repository (for determining package name)
+        known_modules: List of known module names to match imports against
 
     Returns:
         Set of module names imported from the target package
@@ -776,7 +777,28 @@ def _analyze_python_imports(file_path: Path, target_path: Path | None = None) ->
     except (SyntaxError, FileNotFoundError, UnicodeDecodeError):
         return set()
 
-    # Determine the package prefix to look for
+    imports = set()
+
+    # If we have known modules, use them to match imports
+    if known_modules:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    # Check if import matches any known module
+                    for mod in known_modules:
+                        if alias.name == mod or alias.name.startswith(f"{mod}."):
+                            imports.add(mod)
+                            break
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    # Check if from-import matches any known module
+                    for mod in known_modules:
+                        if node.module == mod or node.module.startswith(f"{mod}."):
+                            imports.add(mod)
+                            break
+        return imports
+
+    # Fallback: Determine the package prefix to look for
     package_prefix = "src."  # Default for ghostfolio-agent
     if target_path:
         # Try to detect the package name from the target path
@@ -792,7 +814,6 @@ def _analyze_python_imports(file_path: Path, target_path: Path | None = None) ->
                     package_prefix = f"{item.name}."
                     break
 
-    imports = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -947,6 +968,129 @@ def _get_version(target_path: Path | None = None) -> str:
     return "v0.1.0"
 
 
+def _analyze_module_dependencies(target_path: Path, module_name: str) -> tuple[list[DependencyNode], list[DependencyEdge]]:
+    """Analyze submodules within a specific module for drill-down view.
+
+    Args:
+        target_path: Root path of the repository
+        module_name: Name of the module to drill down into (e.g., "fastapi")
+
+    Returns:
+        Tuple of (nodes, edges) for the module's internal structure
+    """
+    nodes: list[DependencyNode] = []
+    edges: list[DependencyEdge] = []
+
+    module_path = target_path / module_name
+    if not module_path.exists() or not module_path.is_dir():
+        return nodes, edges
+
+    # Find all Python files and submodules
+    submodules: dict[str, Path] = {}
+
+    # Add Python files as submodules
+    for py_file in module_path.glob("*.py"):
+        if py_file.name != "__init__.py":
+            name = py_file.stem
+            submodules[name] = py_file
+
+    # Add subdirectories as submodules
+    for item in module_path.iterdir():
+        if item.is_dir() and not item.name.startswith("_") and item.name != "pycache__":
+            if (item / "__init__.py").exists() or any(item.rglob("*.py")):
+                submodules[item.name] = item
+
+    # Analyze imports between submodules
+    submodule_imports: dict[str, set[str]] = defaultdict(set)
+    for sub_name, sub_path in submodules.items():
+        if sub_path.is_file():
+            imports = _analyze_submodule_imports(sub_path, module_name, list(submodules.keys()))
+            submodule_imports[sub_name].update(imports)
+        else:
+            # For directories, analyze all Python files
+            for py_file in sub_path.rglob("*.py"):
+                imports = _analyze_submodule_imports(py_file, module_name, list(submodules.keys()))
+                submodule_imports[sub_name].update(imports)
+
+    # Build nodes
+    for sub_name in sorted(submodules.keys()):
+        # Determine type based on name patterns
+        if "test" in sub_name.lower():
+            node_type, icon, color = "service", "science", "emerald"
+        elif "route" in sub_name.lower() or "api" in sub_name.lower():
+            node_type, icon, color = "api", "api", "slate"
+        elif "util" in sub_name.lower() or "helper" in sub_name.lower():
+            node_type, icon, color = "service", "build", "indigo"
+        elif "security" in sub_name.lower() or "auth" in sub_name.lower():
+            node_type, icon, color = "service", "lock", "emerald"
+        elif "openapi" in sub_name.lower() or "doc" in sub_name.lower():
+            node_type, icon, color = "service", "description", "indigo"
+        else:
+            node_type, icon, color = "service", "extension", "indigo"
+
+        nodes.append(DependencyNode(
+            id=f"submodule-{sub_name}",
+            name=sub_name.replace("_", " ").title(),
+            type=node_type,
+            icon=icon,
+            color=color,
+        ))
+
+    # Build edges
+    for sub_name, imports in submodule_imports.items():
+        for imported in imports:
+            if imported in submodules and imported != sub_name:
+                edges.append(DependencyEdge(
+                    source=f"submodule-{sub_name}",
+                    target=f"submodule-{imported}",
+                ))
+
+    return nodes, edges
+
+
+def _analyze_submodule_imports(file_path: Path, module_name: str, known_submodules: list[str]) -> set[str]:
+    """Extract submodule imports from a Python file.
+
+    Args:
+        file_path: Path to Python file
+        module_name: Parent module name (e.g., "fastapi")
+        known_submodules: List of known submodule names
+
+    Returns:
+        Set of submodule names imported
+    """
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (SyntaxError, FileNotFoundError, UnicodeDecodeError):
+        return set()
+
+    imports = set()
+    module_prefix = f"{module_name}."
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(module_prefix):
+                    # Extract submodule name (e.g., "fastapi.routing" -> "routing")
+                    parts = alias.name.split(".")
+                    if len(parts) >= 2 and parts[1] in known_submodules:
+                        imports.add(parts[1])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                if node.module.startswith(module_prefix):
+                    parts = node.module.split(".")
+                    if len(parts) >= 2 and parts[1] in known_submodules:
+                        imports.add(parts[1])
+                elif node.module == module_name:
+                    # from fastapi import X - check level
+                    if node.level == 0:
+                        # Relative import check for sibling modules
+                        pass
+
+    return imports
+
+
 def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[DependencyNode], list[DependencyEdge]]:
     """Analyze the repository structure and build dependency graph from actual imports.
 
@@ -975,7 +1119,7 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
         module_dir = src_dir / module
         if module_dir.exists():
             for py_file in module_dir.rglob("*.py"):
-                imports = _analyze_python_imports(py_file, target_path=target_path)
+                imports = _analyze_python_imports(py_file, target_path=target_path, known_modules=modules)
                 module_imports[module].update(imports)
 
     # Module display configuration
@@ -1081,6 +1225,30 @@ async def get_connected_repo_dependencies(repo_id: str) -> DependenciesResponse:
         raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
 
     nodes, edges = _analyze_repo_dependencies(target_path=repo_path)
+    return DependenciesResponse(nodes=nodes, edges=edges)
+
+
+@app.get("/repo/{repo_id}/dependencies/{module_name}", response_model=DependenciesResponse, tags=["Repo"])
+async def get_module_dependencies(repo_id: str, module_name: str) -> DependenciesResponse:
+    """Get dependency graph for a specific module (drill-down view).
+
+    Analyzes submodules/files within a module and their internal dependencies.
+    Use this to drill down into a module node from the top-level graph.
+
+    Args:
+        repo_id: The connection ID returned from /repo/connect
+        module_name: The module to analyze (e.g., "fastapi", "tests")
+
+    Returns:
+        DependenciesResponse with nodes and edges for the module's internal structure
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+
+    if not repo_path:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    nodes, edges = _analyze_module_dependencies(repo_path, module_name)
     return DependenciesResponse(nodes=nodes, edges=edges)
 
 

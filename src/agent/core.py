@@ -20,6 +20,7 @@ from src.tools import ALL_TOOLS
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
 from src.utils.tracing import configure_langsmith, is_tracing_enabled, TraceContext
+from src.utils.usage_tracker import log_usage
 from src.verification import VerificationPipeline
 
 logger = get_logger(__name__)
@@ -257,11 +258,28 @@ class GhostfolioAgent:
 
                 return {"raw": content}
 
-            # Get final AI response
+            # Get final AI response and extract token usage
+            last_ai_message: AIMessage | None = None
             for msg in reversed(response_messages):
                 if isinstance(msg, AIMessage):
                     response_text = msg.content
+                    last_ai_message = msg
                     break
+
+            # Log token usage if available
+            if last_ai_message and hasattr(last_ai_message, "response_metadata"):
+                usage_meta = last_ai_message.response_metadata.get("token_usage", {})
+                if usage_meta:
+                    input_tokens = usage_meta.get("prompt_tokens", 0)
+                    output_tokens = usage_meta.get("completion_tokens", 0)
+                    if input_tokens > 0 or output_tokens > 0:
+                        log_usage(
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            model=self.llm.model_name,
+                            session_id=session_id,
+                            query=message[:100] if message else None,
+                        )
 
             # Extract ALL tool calls from all messages (not just final response)
             from langchain_core.messages import ToolMessage

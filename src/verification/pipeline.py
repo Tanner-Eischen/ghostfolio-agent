@@ -17,6 +17,7 @@ from typing import Any, Literal
 from langsmith import traceable
 from pydantic import BaseModel, Field
 
+from src.utils.config_store import get_verification_config_store
 from src.utils.logging import get_logger
 from src.verification.confidence import (
     ConfidenceAssessment,
@@ -105,20 +106,31 @@ class VerificationPipeline:
 
     def __init__(
         self,
-        confidence_threshold: float = ESCALATION_THRESHOLD,
-        strict_mode: bool = False,
+        confidence_threshold: float | None = None,
+        strict_mode: bool | None = None,
     ) -> None:
         """Initialize verification pipeline.
 
         Args:
-            confidence_threshold: Minimum confidence before escalation (default 70%)
+            confidence_threshold: Minimum confidence before escalation (default from config store)
             strict_mode: If True, any violation fails verification
         """
         self.fact_checker = FactChecker()
         self.confidence_scorer = ConfidenceScorer()
         self.constraint_validator = ConstraintValidator()
-        self.confidence_threshold = confidence_threshold
-        self.strict_mode = strict_mode
+
+        # Read from config store if not explicitly provided
+        config_store = get_verification_config_store()
+        self.confidence_threshold = (
+            confidence_threshold
+            if confidence_threshold is not None
+            else config_store.get("confidence_threshold", ESCALATION_THRESHOLD)
+        )
+        self.strict_mode = (
+            strict_mode
+            if strict_mode is not None
+            else config_store.get("strict_mode", False)
+        )
 
     @traceable(name="verification_pipeline_verify", run_type="chain")
     async def verify(
