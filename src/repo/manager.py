@@ -1,0 +1,383 @@
+"""Repository connection manager for docking workbench.
+
+This module manages connections to target repositories (git or local) for analysis.
+Provides secure cloning, path validation, and connection lifecycle management.
+"""
+
+import asyncio
+import re
+import shutil
+import subprocess
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, Field
+
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Configuration
+REPOS_DIR = Path("data/repos")
+CLONE_TIMEOUT_SECONDS = 60
+
+# Security: Blocked protocols and patterns
+BLOCKED_PROTOCOLS = {"file", "ftp", "sftp", "ssh"}
+SENSITIVE_PATHS = {
+    "/etc", "/root", "/home", "/var", "/usr", "/bin", "/sbin",
+    "C:\\Windows", "C:\\Program Files", "C:\\Users",
+}
+
+# Path traversal patterns to block
+PATH_TRAVERSAL_PATTERNS = [
+    r"\.\./",           # ../
+    r"\.\.\\",          # ..\
+    r"\.\.$",           # ends with ..
+    r"^/etc/",          # etc directory
+    r"^/root/",         # root home
+]
+
+
+class RepoConnectionRequest(BaseModel):
+    """Request to connect to a repository."""
+    source: str = Field(..., description="Git URL or local path to the repository")
+    branch: Optional[str] = Field(default=None, description="Branch to checkout (default: main/master)")
+    name: Optional[str] = Field(default=None, description="Optional name for the connection")
+
+
+class RepoConnection(BaseModel):
+    """Information about a connected repository."""
+    id: str = Field(..., description="Unique connection ID")
+    name: str = Field(..., description="Repository name")
+    source: str = Field(..., description="Original source URL or path")
+    branch: Optional[str] = Field(default=None, description="Branch name")
+    path: str = Field(..., description="Local path to the repository")
+    connected_at: str = Field(..., description="ISO timestamp of connection")
+    is_local: bool = Field(default=False, description="Whether this is a local path (not cloned)")
+
+
+class RepoConnectionResponse(BaseModel):
+    """Response after connecting to a repository."""
+    success: bool = Field(..., description="Whether connection was successful")
+    connection: Optional[RepoConnection] = Field(default=None, description="Connection details if successful")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+
+
+class RepoManager:
+    """Manages repository connections for the docking workbench.
+
+    Handles:
+    - Git repository cloning with timeout
+    - Local path validation and registration
+    - Connection lifecycle (connect, disconnect, list)
+    - Security: protocol blocking, path traversal protection
+    """
+
+    def __init__(self, repos_dir: Path = REPOS_DIR):
+        self.repos_dir = repos_dir
+        self.repos_dir.mkdir(parents=True, exist_ok=True)
+        self._connections: dict[str, RepoConnection] = {}
+
+    def _validate_source(self, source: str) -> tuple[bool, str, Optional[str]]:
+        """Validate the source URL or path.
+
+        Returns:
+            Tuple of (is_valid, error_message, source_type)
+            source_type is 'git', 'local', or None if invalid
+        """
+        source = source.strip()
+
+        if not source:
+            return False, "Source cannot be empty", None
+
+        # Check for git URLs
+        git_patterns = [
+            r"^https?://",           # http:// or https://
+            r"^git://",              # git://
+            r"^git@",                # git@host:path
+            r"^ssh://",              # ssh://
+        ]
+
+        is_git = any(re.match(pattern, source) for pattern in git_patterns)
+
+        if is_git:
+            # Block dangerous protocols
+            parsed = urlparse(source)
+            if parsed.scheme.lower() in BLOCKED_PROTOCOLS:
+                return False, f"Protocol '{parsed.scheme}' is not allowed", None
+
+            # Block embedded credentials
+            if "@" in source and "://" in source:
+                # Check if it's credentials in URL (not git@)
+                if not source.startswith("git@"):
+                    match = re.search(r"://[^:]+:[^@]+@", source)
+                    if match:
+                        return False, "Embedded credentials in URLs are not allowed", None
+
+            return True, "", "git"
+
+        # Treat as local path
+        return self._validate_local_path(source)
+
+    def _validate_local_path(self, path: str) -> tuple[bool, str, Optional[str]]:
+        """Validate a local filesystem path.
+
+        Security checks:
+        - Path traversal prevention
+        - Sensitive directory blocking
+        - Path existence and accessibility
+        """
+        path = path.strip()
+
+        # Normalize path
+        try:
+            resolved = Path(path).resolve()
+        except Exception as e:
+            return False, f"Invalid path format: {e}", None
+
+        path_str = str(resolved)
+
+        # Check for path traversal patterns
+        for pattern in PATH_TRAVERSAL_PATTERNS:
+            if re.search(pattern, path_str, re.IGNORECASE):
+                return False, "Path traversal detected - access denied", None
+
+        # Block sensitive paths (case-insensitive on Windows)
+        for sensitive in SENSITIVE_PATHS:
+            if path_str.lower().startswith(sensitive.lower()):
+                return False, f"Access to system directories is not allowed", None
+
+        # Check path exists and is a directory
+        if not resolved.exists():
+            return False, f"Path does not exist: {path}", None
+
+        if not resolved.is_dir():
+            return False, f"Path is not a directory: {path}", None
+
+        return True, "", "local"
+
+    def _extract_repo_name(self, source: str) -> str:
+        """Extract a repository name from URL or path."""
+        source = source.strip().rstrip("/")
+
+        # Remove .git suffix
+        if source.endswith(".git"):
+            source = source[:-4]
+
+        # Get last segment
+        name = source.split("/")[-1]
+
+        # Handle git@ URLs
+        if ":" in name and "@" in source:
+            name = name.split(":")[-1].replace("/", "-")
+
+        # Handle Windows paths
+        if "\\" in name:
+            name = name.split("\\")[-1]
+
+        # Fallback
+        if not name or name == ".":
+            name = "unknown-repo"
+
+        return name
+
+    async def connect(self, request: RepoConnectionRequest) -> RepoConnectionResponse:
+        """Connect to a repository.
+
+        For git URLs: clones the repository
+        For local paths: validates and registers the path
+
+        Args:
+            request: Connection request with source, optional branch, optional name
+
+        Returns:
+            RepoConnectionResponse with connection details or error
+        """
+        is_valid, error, source_type = self._validate_source(request.source)
+
+        if not is_valid:
+            return RepoConnectionResponse(success=False, error=error)
+
+        repo_id = str(uuid.uuid4())[:8]
+        name = request.name or self._extract_repo_name(request.source)
+        now = datetime.utcnow().isoformat()
+
+        if source_type == "git":
+            # Clone the repository
+            clone_path = self.repos_dir / repo_id
+
+            try:
+                await self._clone_repo(request.source, clone_path, request.branch)
+            except Exception as e:
+                logger.error(f"Failed to clone repository: {e}")
+                return RepoConnectionResponse(
+                    success=False,
+                    error=f"Failed to clone repository: {e}"
+                )
+
+            connection = RepoConnection(
+                id=repo_id,
+                name=name,
+                source=request.source,
+                branch=request.branch,
+                path=str(clone_path),
+                connected_at=now,
+                is_local=False,
+            )
+
+        else:  # local
+            resolved_path = str(Path(request.source).resolve())
+            connection = RepoConnection(
+                id=repo_id,
+                name=name,
+                source=request.source,
+                branch=request.branch,
+                path=resolved_path,
+                connected_at=now,
+                is_local=True,
+            )
+
+        self._connections[repo_id] = connection
+        logger.info(f"Connected to repository: {name} (id={repo_id})")
+
+        return RepoConnectionResponse(success=True, connection=connection)
+
+    async def _clone_repo(self, url: str, target_path: Path, branch: Optional[str] = None) -> None:
+        """Clone a git repository with timeout.
+
+        Args:
+            url: Git repository URL
+            target_path: Where to clone
+            branch: Optional branch to checkout
+
+        Raises:
+            RuntimeError: If clone fails or times out
+        """
+        cmd = ["git", "clone", "--depth", "1"]
+
+        if branch:
+            cmd.extend(["--branch", branch])
+
+        cmd.extend([url, str(target_path)])
+
+        logger.info(f"Cloning repository: {url}")
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=CLONE_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                raise RuntimeError(f"Clone timed out after {CLONE_TIMEOUT_SECONDS} seconds")
+
+            if process.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                raise RuntimeError(f"Clone failed: {error_msg}")
+
+            logger.info(f"Successfully cloned to {target_path}")
+
+        except FileNotFoundError:
+            raise RuntimeError("Git is not installed or not in PATH")
+
+    def get_repo_path(self, repo_id: str) -> Optional[Path]:
+        """Get the filesystem path for a connected repository.
+
+        Args:
+            repo_id: The connection ID
+
+        Returns:
+            Path to the repository, or None if not found
+        """
+        connection = self._connections.get(repo_id)
+        if connection:
+            path = Path(connection.path)
+            if path.exists():
+                return path
+        return None
+
+    def disconnect(self, repo_id: str) -> bool:
+        """Disconnect and optionally cleanup a repository.
+
+        For cloned repos: removes the cloned directory
+        For local repos: just removes the connection
+
+        Args:
+            repo_id: The connection ID
+
+        Returns:
+            True if disconnected, False if not found
+        """
+        connection = self._connections.get(repo_id)
+        if not connection:
+            return False
+
+        # Cleanup cloned repos
+        if not connection.is_local:
+            path = Path(connection.path)
+            if path.exists():
+                try:
+                    shutil.rmtree(path)
+                    logger.info(f"Removed cloned repository at {path}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup clone at {path}: {e}")
+
+        del self._connections[repo_id]
+        logger.info(f"Disconnected repository: {connection.name} (id={repo_id})")
+
+        return True
+
+    def list_connections(self) -> list[RepoConnection]:
+        """List all active repository connections.
+
+        Returns:
+            List of RepoConnection objects
+        """
+        # Validate connections still exist
+        valid_connections = []
+        for conn in self._connections.values():
+            if Path(conn.path).exists():
+                valid_connections.append(conn)
+            else:
+                # Auto-cleanup stale connections
+                logger.warning(f"Cleaning up stale connection: {conn.id}")
+                del self._connections[conn.id]
+
+        return valid_connections
+
+    def get_connection(self, repo_id: str) -> Optional[RepoConnection]:
+        """Get a specific connection by ID.
+
+        Args:
+            repo_id: The connection ID
+
+        Returns:
+            RepoConnection if found and valid, None otherwise
+        """
+        connection = self._connections.get(repo_id)
+        if connection and Path(connection.path).exists():
+            return connection
+        return None
+
+
+# Global singleton instance
+_repo_manager: Optional[RepoManager] = None
+
+
+def get_repo_manager() -> RepoManager:
+    """Get the global RepoManager instance."""
+    global _repo_manager
+    if _repo_manager is None:
+        _repo_manager = RepoManager()
+    return _repo_manager

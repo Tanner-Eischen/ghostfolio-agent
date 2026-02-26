@@ -10,7 +10,10 @@ This module provides REST API endpoints for the Ghostfolio Agent:
 Task #15: Create FastAPI backend
 """
 
+import ast
+from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 import uuid
 
@@ -19,9 +22,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.agent import GhostfolioAgent
+from src.tools.registry import list_tools as list_registered_tools, get_tool_schema
 from src.utils.config import get_settings
+from src.utils.config_store import (
+    get_verification_config_store,
+    get_strategy_config_store,
+)
+from src.utils.langsmith_client import get_recent_runs, get_run_details
 from src.utils.logging import get_logger, setup_logging
 from src.utils.tracing import log_feedback, is_tracing_enabled
+from src.utils.usage_tracker import get_usage_stats, get_cost_projections
+from src.repo.manager import (
+    get_repo_manager,
+    RepoConnectionRequest,
+    RepoConnection,
+    RepoConnectionResponse,
+)
+
+# Import eval runner API wrapper
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from evals.runner_api import (
+    list_eval_cases as get_real_eval_cases,
+    get_latest_results,
+    format_results_for_api,
+    run_evals_async,
+)
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -502,6 +529,976 @@ async def get_market_data(symbol: str) -> dict[str, Any]:
             status_code=500,
             detail=f"Market data error: {str(e)}",
         )
+
+
+# ============================================================================
+# Repo Endpoints (Page 1 - Dashboard)
+# ============================================================================
+
+
+class RepoInfoResponse(BaseModel):
+    """Repository information response."""
+
+    name: str = Field(..., description="Repository name")
+    version: str = Field(..., description="Current version")
+    status: str = Field(..., description="Repository status")
+    endpoints: int = Field(..., description="Number of detected endpoints")
+    services: int = Field(..., description="Number of detected services")
+    tool_hooks: int = Field(..., description="Number of tool hooks")
+
+
+class DependencyNode(BaseModel):
+    """A node in the dependency graph."""
+
+    id: str = Field(..., description="Unique node identifier")
+    name: str = Field(..., description="Display name")
+    type: str = Field(..., description="Node type: agent, service, database, api")
+    icon: str = Field(..., description="Material icon name")
+    color: str = Field(..., description="Color theme: primary, indigo, emerald, slate")
+
+
+class DependencyEdge(BaseModel):
+    """An edge in the dependency graph."""
+
+    source: str = Field(..., description="Source node ID")
+    target: str = Field(..., description="Target node ID")
+    label: str | None = Field(default=None, description="Optional edge label")
+
+
+class DependenciesResponse(BaseModel):
+    """Dependencies graph response."""
+
+    nodes: list[DependencyNode] = Field(..., description="Graph nodes")
+    edges: list[DependencyEdge] = Field(..., description="Graph edges")
+
+
+class ConnectionsListResponse(BaseModel):
+    """Response for listing connections."""
+    connections: list[RepoConnection] = Field(default_factory=list, description="Active connections")
+
+
+# ============================================================================
+# Repo Connection Endpoints
+# ============================================================================
+
+
+@app.post("/repo/connect", response_model=RepoConnectionResponse, tags=["Repo"])
+async def connect_repo(request: RepoConnectionRequest) -> RepoConnectionResponse:
+    """Connect to a target repository for analysis.
+
+    Accepts a git URL or local path to a repository. For git URLs, clones
+    the repository. For local paths, validates and registers the path.
+
+    Args:
+        request: Connection request with source (URL or path), optional branch, optional name
+
+    Returns:
+        RepoConnectionResponse with connection details or error
+    """
+    manager = get_repo_manager()
+    return await manager.connect(request)
+
+
+@app.get("/repo/connections", response_model=ConnectionsListResponse, tags=["Repo"])
+async def list_connections() -> ConnectionsListResponse:
+    """List all active repository connections.
+
+    Returns:
+        List of connected repositories with their metadata
+    """
+    manager = get_repo_manager()
+    connections = manager.list_connections()
+    return ConnectionsListResponse(connections=connections)
+
+
+@app.delete("/repo/{repo_id}", tags=["Repo"])
+async def disconnect_repo(repo_id: str) -> dict[str, bool]:
+    """Disconnect and cleanup a repository connection.
+
+    For cloned repos: removes the cloned directory
+    For local repos: just removes the connection
+
+    Args:
+        repo_id: The connection ID to disconnect
+
+    Returns:
+        {"success": true} if disconnected, 404 if not found
+    """
+    manager = get_repo_manager()
+    if manager.disconnect(repo_id):
+        return {"success": True}
+    raise HTTPException(status_code=404, detail=f"Connection {repo_id} not found")
+
+
+# ============================================================================
+# Repo Analysis Endpoints
+# ============================================================================
+
+
+@app.get("/repo", response_model=RepoInfoResponse, tags=["Repo"])
+async def get_repo_info() -> RepoInfoResponse:
+    """Get repository information and analysis.
+
+    Returns metadata about the connected codebase including
+    detected endpoints, services, and tool integration points.
+    Reads from environment variables or git commands.
+    """
+    import subprocess
+    from pathlib import Path
+
+    # Try to get repo info from environment variables first
+    repo_name = settings.repo_name
+    repo_branch = settings.repo_branch
+
+    # Fallback to git commands if not set
+    if not repo_name or not repo_branch:
+        try:
+            # Get repo root
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                cwd=Path(__file__).parent.parent.parent,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                repo_root = Path(result.stdout.strip())
+
+                # Get remote URL to extract repo name
+                remote_result = subprocess.run(
+                    ["git", "remote", "get-url", "origin"],
+                    capture_output=True,
+                    text=True,
+                    cwd=repo_root,
+                    timeout=5,
+                )
+                if remote_result.returncode == 0:
+                    remote_url = remote_result.stdout.strip()
+                    # Extract name from URLs like:
+                    # https://github.com/user/repo.git -> user/repo
+                    # git@github.com:user/repo.git -> user/repo
+                    if remote_url:
+                        remote_url = remote_url.replace(".git", "")
+                        if "/" in remote_url:
+                            parts = remote_url.split("/")
+                            if len(parts) >= 2:
+                                if not repo_name:
+                                    repo_name = f"{parts[-2]}/{parts[-1]}"
+
+                # Get current branch
+                branch_result = subprocess.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    cwd=repo_root,
+                    timeout=5,
+                )
+                if branch_result.returncode == 0 and not repo_branch:
+                    repo_branch = branch_result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            logger.debug(f"Could not get git info: {e}")
+
+    # Default values if still not set
+    if not repo_name:
+        repo_name = "ghostfolio-agent"
+    if not repo_branch:
+        repo_branch = "main"
+
+    # Compute real values from code analysis
+    endpoints = _count_fastapi_endpoints()
+    modules = _detect_modules()
+    tool_hooks = _count_tool_hooks()
+    version = _get_version()
+
+    return RepoInfoResponse(
+        name=repo_name,
+        version=version,
+        status="indexed",
+        endpoints=endpoints,
+        services=len(modules),
+        tool_hooks=tool_hooks,
+    )
+
+
+@app.get("/repo/{repo_id}", response_model=RepoInfoResponse, tags=["Repo"])
+async def get_connected_repo_info(repo_id: str) -> RepoInfoResponse:
+    """Get analysis for a connected repository.
+
+    Args:
+        repo_id: The connection ID returned from /repo/connect
+
+    Returns:
+        RepoInfoResponse with analysis of the connected repository
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+
+    if not repo_path:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    connection = manager.get_connection(repo_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    # Analyze the connected repository
+    modules = _detect_modules(target_path=repo_path)
+    endpoints = _count_endpoints_in_path(repo_path)
+    version = _get_version(target_path=repo_path)
+
+    return RepoInfoResponse(
+        name=connection.name,
+        version=version,
+        status="connected",
+        endpoints=endpoints,
+        services=len(modules),
+        tool_hooks=0,  # Tool hooks are specific to this agent, not target repos
+    )
+
+
+# ============================================================================
+# Code Analysis Helpers (Real Data)
+# ============================================================================
+
+
+def _analyze_python_imports(file_path: Path, target_path: Path | None = None) -> set[str]:
+    """Extract internal module imports from a Python file using AST.
+
+    Args:
+        file_path: Path to Python file
+        target_path: Root path of the target repository (for determining package name)
+
+    Returns:
+        Set of module names imported from the target package
+    """
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (SyntaxError, FileNotFoundError, UnicodeDecodeError):
+        return set()
+
+    # Determine the package prefix to look for
+    package_prefix = "src."  # Default for ghostfolio-agent
+    if target_path:
+        # Try to detect the package name from the target path
+        package_name = target_path.name
+        if (target_path / package_name / "__init__.py").exists():
+            package_prefix = f"{package_name}."
+        elif (target_path / "src" / "__init__.py").exists():
+            package_prefix = "src."
+        else:
+            # Look for any Python package in the target
+            for item in target_path.iterdir():
+                if item.is_dir() and (item / "__init__.py").exists() and not item.name.startswith("_"):
+                    package_prefix = f"{item.name}."
+                    break
+
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(package_prefix):
+                    # Extract module name (e.g., "src.agent" -> "agent")
+                    parts = alias.name.split(".")
+                    if len(parts) >= 2:
+                        imports.add(parts[1])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.startswith(package_prefix):
+                # Extract module name
+                parts = node.module.split(".")
+                if len(parts) >= 2:
+                    imports.add(parts[1])
+    return imports
+
+
+def _count_fastapi_endpoints() -> int:
+    """Count registered FastAPI endpoints.
+
+    Returns:
+        Number of unique route endpoints (counting each route once, not per method)
+    """
+    count = 0
+    for route in app.routes:
+        # Count routes that have methods (actual endpoints, not mounts)
+        if hasattr(route, "methods") and route.methods:
+            # Count each unique path as one endpoint
+            count += 1
+    return count
+
+
+def _count_tool_hooks() -> int:
+    """Count registered tool functions.
+
+    Returns:
+        Number of tools in the registry
+    """
+    try:
+        from src.tools.registry import get_tool_count
+        return get_tool_count()
+    except Exception:
+        return 0
+
+
+def _count_endpoints_in_path(target_path: Path) -> int:
+    """Count API endpoints in a target repository.
+
+    Detects FastAPI routes (@app.get, @router.post), Flask routes (@app.route),
+    and similar patterns.
+
+    Args:
+        target_path: Path to the target repository
+
+    Returns:
+        Number of detected API endpoints
+    """
+    count = 0
+
+    # Patterns to look for in Python files
+    route_patterns = [
+        r"@app\.(get|post|put|delete|patch)\s*\(",
+        r"@router\.(get|post|put|delete|patch)\s*\(",
+        r"@app\.route\s*\(",
+        r"@blueprint\.(get|post|put|delete|patch)\s*\(",
+        r"@api\.resource\s*\(",
+    ]
+
+    import re
+
+    for py_file in target_path.rglob("*.py"):
+        try:
+            content = py_file.read_text(encoding="utf-8")
+            for pattern in route_patterns:
+                count += len(re.findall(pattern, content, re.IGNORECASE))
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue
+
+    return count
+
+
+def _detect_modules(target_path: Path | None = None) -> list[str]:
+    """Detect actual modules in src/ or target directory.
+
+    Args:
+        target_path: Optional path to target repository. If None, uses ghostfolio-agent's src/
+
+    Returns:
+        List of module directory names
+    """
+    if target_path:
+        # Look for Python package directories in target
+        modules = []
+        for item in target_path.iterdir():
+            if item.is_dir() and not item.name.startswith(("_", ".")) and item.name != "pycache__":
+                # Check if it's a Python package or a module directory
+                if (item / "__init__.py").exists() or any(item.rglob("*.py")):
+                    modules.append(item.name)
+        return sorted(modules)
+    else:
+        # Default behavior for ghostfolio-agent
+        src_dir = Path(__file__).parent.parent
+        modules = []
+        if src_dir.exists():
+            for item in src_dir.iterdir():
+                if item.is_dir() and not item.name.startswith("_") and not item.name == "pycache":
+                    modules.append(item.name)
+        return sorted(modules)
+
+
+def _get_version(target_path: Path | None = None) -> str:
+    """Get version from pyproject.toml or git.
+
+    Args:
+        target_path: Optional path to target repository. If None, uses ghostfolio-agent's root
+
+    Returns:
+        Version string
+    """
+    import subprocess
+
+    repo_root = target_path or Path(__file__).parent.parent.parent
+
+    # Try pyproject.toml first
+    pyproject_path = repo_root / "pyproject.toml"
+    if pyproject_path.exists():
+        try:
+            content = pyproject_path.read_text(encoding="utf-8")
+            # Simple regex-free parsing for version
+            for line in content.split("\n"):
+                if line.startswith("version ="):
+                    version = line.split("=")[1].strip().strip('"').strip("'")
+                    if version:
+                        return f"v{version}" if not version.startswith("v") else version
+        except Exception:
+            pass
+
+    # Try git describe
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--always"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+
+    return "v0.1.0"
+
+
+def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[DependencyNode], list[DependencyEdge]]:
+    """Analyze the repository structure and build dependency graph from actual imports.
+
+    Scans the src/ or target directory for modules, parses Python files using AST
+    to extract import statements, and builds a real dependency graph.
+
+    Args:
+        target_path: Optional path to target repository. If None, uses ghostfolio-agent's src/
+    """
+    if target_path:
+        repo_root = target_path
+        src_dir = target_path
+    else:
+        repo_root = Path(__file__).parent.parent.parent
+        src_dir = repo_root / "src"
+
+    nodes: list[DependencyNode] = []
+    edges: list[DependencyEdge] = []
+
+    # Detect actual modules
+    modules = _detect_modules(target_path=target_path)
+
+    # Analyze imports for each module
+    module_imports: dict[str, set[str]] = defaultdict(set)
+    for module in modules:
+        module_dir = src_dir / module
+        if module_dir.exists():
+            for py_file in module_dir.rglob("*.py"):
+                imports = _analyze_python_imports(py_file, target_path=target_path)
+                module_imports[module].update(imports)
+
+    # Module display configuration
+    module_config = {
+        "agent": {"name": "Agent Core", "type": "agent", "icon": "smart_toy", "color": "primary"},
+        "api": {"name": "API Routes", "type": "api", "icon": "api", "color": "slate"},
+        "tools": {"name": "Tool Registry", "type": "service", "icon": "build", "color": "indigo"},
+        "verification": {"name": "Verification Layer", "type": "service", "icon": "verified", "color": "indigo"},
+        "utils": {"name": "Utilities", "type": "service", "icon": "settings", "color": "indigo"},
+        "repo": {"name": "Repository Manager", "type": "service", "icon": "folder", "color": "indigo"},
+    }
+
+    # Add Agent Core as central node (only for ghostfolio-agent, not target repos)
+    if not target_path:
+        nodes.append(DependencyNode(
+            id="agent-core",
+            name="Agent Core",
+            type="agent",
+            icon="smart_toy",
+            color="primary",
+        ))
+
+        # Add database node (external dependency)
+        nodes.append(DependencyNode(
+            id="database",
+            name="Database",
+            type="database",
+            icon="database",
+            color="emerald",
+        ))
+
+    # Add nodes for detected modules
+    for module in modules:
+        config = module_config.get(module, {
+            "name": module.replace("_", " ").title(),
+            "type": "service",
+            "icon": "extension",
+            "color": "indigo"
+        })
+        nodes.append(DependencyNode(
+            id=f"module-{module}",
+            name=config["name"],
+            type=config["type"],
+            icon=config["icon"],
+            color=config["color"],
+        ))
+
+    # Build edges from actual import analysis
+    for module, imports in module_imports.items():
+        for imported in imports:
+            # Only create edges for modules that exist
+            if imported in modules and imported != module:
+                edges.append(DependencyEdge(
+                    source=f"module-{module}",
+                    target=f"module-{imported}",
+                ))
+
+    # Add agent core connections (only for ghostfolio-agent)
+    if not target_path:
+        # Add agent core connections (API routes to agent)
+        if "api" in modules:
+            edges.append(DependencyEdge(source="module-api", target="agent-core", label="routes"))
+
+        # Agent core uses tools
+        if "tools" in modules:
+            edges.append(DependencyEdge(source="agent-core", target="module-tools", label="invokes"))
+
+        # Agent core uses verification
+        if "verification" in modules:
+            edges.append(DependencyEdge(source="agent-core", target="module-verification", label="verifies"))
+
+    return nodes, edges
+
+
+@app.get("/repo/dependencies", response_model=DependenciesResponse, tags=["Repo"])
+async def get_repo_dependencies() -> DependenciesResponse:
+    """Get repository dependency graph.
+
+    Returns a graph structure with nodes (services, databases, etc.)
+    and edges (relationships between them).
+
+    This analyzes the codebase structure and imports to build
+    a dependency graph for the mapper visualization.
+    """
+    nodes, edges = _analyze_repo_dependencies()
+    return DependenciesResponse(nodes=nodes, edges=edges)
+
+
+@app.get("/repo/{repo_id}/dependencies", response_model=DependenciesResponse, tags=["Repo"])
+async def get_connected_repo_dependencies(repo_id: str) -> DependenciesResponse:
+    """Get dependency graph for a connected repository.
+
+    Args:
+        repo_id: The connection ID returned from /repo/connect
+
+    Returns:
+        DependenciesResponse with nodes and edges for the target repository
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+
+    if not repo_path:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    nodes, edges = _analyze_repo_dependencies(target_path=repo_path)
+    return DependenciesResponse(nodes=nodes, edges=edges)
+
+
+# ============================================================================
+# Strategy Endpoints (Page 2 - Strategy)
+# ============================================================================
+
+
+class StrategyConfigResponse(BaseModel):
+    """Strategy configuration response."""
+
+    framework: str = Field(default="LangGraph", description="Selected framework")
+    model: str = Field(default="GPT-4o (OpenAI)", description="Selected model")
+    temperature: float = Field(default=0.0, description="Model temperature")
+    json_mode: bool = Field(default=True, description="JSON mode enabled")
+    stream_responses: bool = Field(default=False, description="Stream responses")
+    contribution_path: str = Field(default="langchain", description="Contribution path")
+
+
+class StrategyRecommendationResponse(BaseModel):
+    """Strategy recommendation response."""
+
+    framework: str = Field(..., description="Framework name")
+    reason: str = Field(..., description="Recommendation reason")
+    recommended: bool = Field(..., description="Is recommended")
+
+
+@app.get("/strategy", response_model=StrategyConfigResponse, tags=["Strategy"])
+async def get_strategy_config() -> StrategyConfigResponse:
+    """Get current strategy configuration.
+
+    Returns the active agent configuration including framework,
+    model, and processing settings.
+    """
+    store = get_strategy_config_store()
+    return StrategyConfigResponse(
+        framework=store.get("framework", "LangGraph"),
+        model=store.get("model", "GPT-4o (OpenAI)"),
+        temperature=store.get("temperature", 0.0),
+        json_mode=store.get("json_mode", True),
+        stream_responses=store.get("stream_responses", False),
+        contribution_path=store.get("contribution_path", "langchain"),
+    )
+
+
+@app.post("/strategy", response_model=StrategyConfigResponse, tags=["Strategy"])
+async def save_strategy_config(config: StrategyConfigResponse) -> StrategyConfigResponse:
+    """Save strategy configuration.
+
+    Updates the active agent configuration and persists it.
+    """
+    store = get_strategy_config_store()
+    store.update(config.model_dump())
+    logger.info(f"Strategy config updated: {config.model_dump()}")
+    return config
+
+
+@app.get("/strategy/recommendations", response_model=list[StrategyRecommendationResponse], tags=["Strategy"])
+async def get_strategy_recommendations() -> list[StrategyRecommendationResponse]:
+    """Get strategy recommendations based on repo analysis.
+
+    Returns framework recommendations tailored to the connected codebase.
+    """
+    return [
+        StrategyRecommendationResponse(
+            framework="LangGraph",
+            reason="Best fit for stateful cyclic workflows with complex tool orchestration",
+            recommended=True,
+        ),
+        StrategyRecommendationResponse(
+            framework="LangChain",
+            reason="Simpler linear chains if you don't need state management",
+            recommended=False,
+        ),
+        StrategyRecommendationResponse(
+            framework="CrewAI",
+            reason="Consider for multi-agent collaboration scenarios",
+            recommended=False,
+        ),
+    ]
+
+
+# ============================================================================
+# Tools Endpoints (Page 3 - Tool Library)
+# ============================================================================
+
+
+class ToolResponse(BaseModel):
+    """Tool response model."""
+
+    id: str = Field(..., description="Tool ID")
+    name: str = Field(..., description="Tool name")
+    description: str = Field(..., description="Tool description")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Tool parameters")
+    status: str = Field(default="active", description="Tool status")
+
+
+class ToolCreateRequest(BaseModel):
+    """Tool creation request."""
+
+    name: str = Field(..., min_length=1, description="Tool name")
+    description: str = Field(..., min_length=1, description="Tool description")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Tool parameters")
+
+
+@app.get("/tools", response_model=list[ToolResponse], tags=["Tools"])
+async def list_tools_registry() -> list[ToolResponse]:
+    """List all registered tools.
+
+    Returns all tools discovered from the src/tools/ directory.
+    """
+    tools = list_registered_tools()
+    return [
+        ToolResponse(
+            id=tool["id"],
+            name=tool["name"],
+            description=tool["description"],
+            parameters=tool["parameters"],
+            status=tool.get("status", "active"),
+        )
+        for tool in tools
+    ]
+
+
+@app.post("/tools", response_model=ToolResponse, tags=["Tools"])
+async def create_tool(request: ToolCreateRequest) -> ToolResponse:
+    """Create a new tool (placeholder for future dynamic tool creation).
+
+    Note: In the current implementation, tools are discovered from
+    src/tools/ and cannot be created at runtime. This endpoint
+    is provided for API compatibility.
+    """
+    import uuid
+
+    # For now, just return the tool info but don't actually register it
+    # Tools must be added to src/tools/ and ALL_TOOLS
+    logger.warning(f"Tool creation requested but not implemented: {request.name}")
+    return ToolResponse(
+        id=str(uuid.uuid4()),
+        name=request.name,
+        description=request.description,
+        parameters=request.parameters,
+        status="inactive",  # Mark as inactive since it's not actually registered
+    )
+
+
+# ============================================================================
+# Verification Endpoints (Page 4 - Verification)
+# ============================================================================
+
+
+class VerificationConfigResponse(BaseModel):
+    """Verification configuration response."""
+
+    fact_checking: bool = Field(default=True, description="Enable fact checking")
+    hallucination_detection: bool = Field(default=True, description="Enable hallucination detection")
+    confidence_scoring: bool = Field(default=True, description="Enable confidence scoring")
+    hitl_enabled: bool = Field(default=False, description="Enable human-in-the-loop")
+    confidence_threshold: int = Field(default=70, ge=0, le=100, description="Confidence threshold for HITL")
+
+
+@app.get("/verification/config", response_model=VerificationConfigResponse, tags=["Verification"])
+async def get_verification_config() -> VerificationConfigResponse:
+    """Get verification configuration.
+
+    Returns current verification layer settings.
+    """
+    store = get_verification_config_store()
+    return VerificationConfigResponse(
+        fact_checking=store.get("fact_checking", True),
+        hallucination_detection=store.get("hallucination_detection", True),
+        confidence_scoring=store.get("confidence_scoring", True),
+        hitl_enabled=store.get("hitl_enabled", False),
+        confidence_threshold=store.get("confidence_threshold", 70),
+    )
+
+
+@app.put("/verification/config", response_model=VerificationConfigResponse, tags=["Verification"])
+async def update_verification_config(config: VerificationConfigResponse) -> VerificationConfigResponse:
+    """Update verification configuration.
+
+    Updates verification layer settings and persists them.
+    """
+    store = get_verification_config_store()
+    store.update(config.model_dump())
+    logger.info(f"Verification config updated: {config.model_dump()}")
+    return config
+
+
+# ============================================================================
+# Traces Endpoints (Page 5 - Observability)
+# ============================================================================
+
+
+class TraceResponse(BaseModel):
+    """Trace response model."""
+
+    id: str = Field(..., description="Trace ID")
+    timestamp: str = Field(..., description="Timestamp")
+    duration_ms: int = Field(..., description="Duration in milliseconds")
+    tokens_used: int = Field(..., description="Total tokens used")
+    status: str = Field(..., description="Trace status")
+    tool_calls: list[str] = Field(default_factory=list, description="Tool calls made")
+
+
+class TraceDetailResponse(TraceResponse):
+    """Trace detail response model."""
+
+    steps: list[dict[str, Any]] = Field(default_factory=list, description="Execution steps")
+
+
+@app.get("/traces", response_model=list[TraceResponse], tags=["Traces"])
+async def list_traces(limit: int = Query(default=20, ge=1, le=100)) -> list[TraceResponse]:
+    """List all traces.
+
+    Returns recent agent execution traces from LangSmith.
+    """
+    # Get real traces from LangSmith
+    runs = get_recent_runs(limit=limit)
+
+    if not runs:
+        # Return empty list if no traces available
+        return []
+
+    return [
+        TraceResponse(
+            id=run["id"],
+            timestamp=run["timestamp"] or "",
+            duration_ms=run["duration_ms"],
+            tokens_used=run["tokens_used"],
+            status=run["status"],
+            tool_calls=run.get("metadata", {}).get("tool_names", []),
+        )
+        for run in runs
+    ]
+
+
+@app.get("/traces/{trace_id}", response_model=TraceDetailResponse, tags=["Traces"])
+async def get_trace_detail(trace_id: str) -> TraceDetailResponse:
+    """Get trace detail.
+
+    Returns detailed information about a specific trace from LangSmith.
+    """
+    run = get_run_details(trace_id)
+
+    if not run:
+        raise HTTPException(status_code=404, detail="Trace not found")
+
+    return TraceDetailResponse(
+        id=run["id"],
+        timestamp=run["timestamp"] or "",
+        duration_ms=run["duration_ms"],
+        tokens_used=run["tokens_used"],
+        status=run["status"],
+        tool_calls=run.get("tool_calls", []),
+        steps=run.get("steps", []),
+    )
+
+
+# ============================================================================
+# Evals Endpoints (Page 6 - Evaluations)
+# ============================================================================
+
+
+class EvalCaseResponse(BaseModel):
+    """Eval case response model."""
+
+    id: str = Field(..., description="Case ID")
+    name: str = Field(..., description="Case name")
+    description: str = Field(..., description="Case description")
+    category: str = Field(..., description="Case category")
+
+
+class EvalResultResponse(BaseModel):
+    """Eval result response model."""
+
+    case_id: str = Field(..., description="Case ID")
+    passed: bool = Field(..., description="Whether the case passed")
+    score: float = Field(..., description="Score (0-1)")
+    duration_ms: int = Field(..., description="Duration in milliseconds")
+    error: str | None = Field(default=None, description="Error message if failed")
+
+
+class EvalSummaryResponse(BaseModel):
+    """Eval summary response model."""
+
+    total_cases: int = Field(..., description="Total cases")
+    passed: int = Field(..., description="Passed cases")
+    failed: int = Field(..., description="Failed cases")
+    pass_rate: float = Field(..., description="Pass rate percentage")
+    avg_latency_ms: int = Field(..., description="Average latency")
+    hallucination_rate: float = Field(..., description="Hallucination rate percentage")
+
+
+class EvalResultsResponse(BaseModel):
+    """Eval results response model."""
+
+    summary: EvalSummaryResponse = Field(..., description="Summary")
+    results: list[EvalResultResponse] = Field(..., description="Individual results")
+
+
+@app.get("/evals/cases", response_model=list[EvalCaseResponse], tags=["Evals"])
+async def list_eval_cases() -> list[EvalCaseResponse]:
+    """List all evaluation cases.
+
+    Returns all available test cases from the eval framework.
+    """
+    cases = get_real_eval_cases()
+    return [
+        EvalCaseResponse(
+            id=case["id"],
+            name=case.get("name", case["id"]),
+            description=case.get("description", ""),
+            category=case.get("category", "unknown"),
+        )
+        for case in cases
+    ]
+
+
+@app.post("/evals/run", tags=["Evals"])
+async def run_evals_endpoint() -> dict[str, str]:
+    """Run all evaluations.
+
+    Triggers evaluation run for all test cases.
+    This runs asynchronously and returns a run_id.
+    """
+    try:
+        run_id = await run_evals_async()
+        logger.info(f"Evaluation run triggered: {run_id}")
+        return {"run_id": run_id, "status": "started"}
+    except Exception as e:
+        logger.error(f"Failed to run evals: {e}")
+        return {"run_id": "", "status": "error", "error": str(e)}
+
+
+@app.get("/evals/results", response_model=EvalResultsResponse, tags=["Evals"])
+async def get_eval_results() -> EvalResultsResponse:
+    """Get evaluation results.
+
+    Returns latest evaluation results and summary from the eval framework.
+    """
+    raw_results = get_latest_results()
+    formatted = format_results_for_api(raw_results)
+
+    summary = formatted["summary"]
+    return EvalResultsResponse(
+        summary=EvalSummaryResponse(
+            total_cases=summary["total_cases"],
+            passed=summary["passed"],
+            failed=summary["failed"],
+            pass_rate=summary["pass_rate"],
+            avg_latency_ms=summary["avg_latency_ms"],
+            hallucination_rate=summary["hallucination_rate"],
+        ),
+        results=[
+            EvalResultResponse(
+                case_id=r["case_id"],
+                passed=r["passed"],
+                score=r["score"],
+                duration_ms=r["duration_ms"],
+                error=r.get("error"),
+            )
+            for r in formatted["results"]
+        ],
+    )
+
+
+# ============================================================================
+# Finances Endpoints (Page 7 - Finances)
+# ============================================================================
+
+
+class UsageStatsResponse(BaseModel):
+    """Usage stats response model."""
+
+    total_cost: float = Field(..., description="Total cost in USD")
+    total_tokens: int = Field(..., description="Total tokens used")
+    requests_count: int = Field(..., description="Total requests count")
+    avg_cost_per_request: float = Field(..., description="Average cost per request")
+
+
+class CostProjectionsResponse(BaseModel):
+    """Cost projections response model."""
+
+    daily_cost: float = Field(..., description="Daily cost projection")
+    monthly_cost: float = Field(..., description="Monthly cost projection")
+    projected_annual: float = Field(..., description="Annual cost projection")
+    cost_breakdown: dict[str, int] = Field(..., description="Cost breakdown by token type")
+
+
+@app.get("/finances/usage", response_model=UsageStatsResponse, tags=["Finances"])
+async def get_usage_stats_endpoint() -> UsageStatsResponse:
+    """Get usage statistics.
+
+    Returns current usage and cost data from the usage tracker.
+    """
+    stats = get_usage_stats()
+    return UsageStatsResponse(
+        total_cost=stats["total_cost"],
+        total_tokens=stats["total_tokens"],
+        requests_count=stats["requests_count"],
+        avg_cost_per_request=stats["avg_cost_per_request"],
+    )
+
+
+@app.get("/finances/projections", response_model=CostProjectionsResponse, tags=["Finances"])
+async def get_cost_projections_endpoint(queries_per_day: int = Query(default=100, ge=1, le=10000)) -> CostProjectionsResponse:
+    """Get cost projections.
+
+    Returns projected costs based on expected query volume.
+    """
+    projections = get_cost_projections(queries_per_day)
+    return CostProjectionsResponse(
+        daily_cost=projections["daily_cost"],
+        monthly_cost=projections["monthly_cost"],
+        projected_annual=projections["projected_annual"],
+        cost_breakdown=projections["cost_breakdown"],
+    )
 
 
 # ============================================================================
