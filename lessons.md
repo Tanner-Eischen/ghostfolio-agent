@@ -1,5 +1,52 @@
 # Lessons Learned
 
+## 2026-02-26: Page 1 Complete - File Explorer, Injection Points, Insights & Drill-Down Dependencies
+
+**Summary**
+- Added drill-down dependency analysis endpoint for submodule-level exploration
+- Added 3 new endpoints: `/files`, `/injection-points`, `/insights` for connected repos
+- Updated Dashboard to use real data from connected repositories
+- Fixed dependency import detection to work with external repos (not just `src.*`)
+
+**Why**
+- Dependency graph only showed 3 top-level edges, missing internal module relationships
+- File Explorer showed hardcoded ghostfolio-agent structure, not connected repo files
+- Injection Points showed placeholder TypeScript code, not actual detected routes
+- Codebase Insight showed placeholder text, not real analysis
+
+**What worked / what didn't**
+- **Worked**: Passing `known_modules` list to import analyzer for matching any module name
+- **Worked**: AST-based route decorator detection (`@app.get`, `@router.post`, etc.)
+- **Worked**: Circular layout algorithm for dynamic node positioning in dependency graph
+- **Worked**: File tree with depth limiting (max_depth=2) for performance
+- **Didn't**: Initial dependency analysis only looked for `src.*` prefix - had to generalize
+
+**Assumptions**
+- Injection points are FastAPI/Flask route decorators (Python only)
+- File tree excludes hidden directories and common non-essential dirs (`.git`, `node_modules`, etc.)
+- Insights are rule-based heuristics, not actual AI analysis (placeholder for future)
+- Drill-down shows submodules but not file-level granularity
+
+**Edge cases**
+- Windows paths with backslashes handled via `pathlib.Path.relative_to()`
+- Python files with syntax errors are silently skipped
+- Large repos limited by `max_depth` and `limit` query parameters
+- Empty `children` arrays for directories beyond max_depth
+
+**Verification**
+- Connected to FastAPI repo: detected 25 submodules, 48 internal edges
+- Injection points found: `GET /items/{item_id}`, `PUT /items/{item_id}`, etc.
+- Insights returned: "FastAPI is a modern async web framework with 1173 detected routes"
+- File tree returns: docs, docs_src, fastapi, scripts, tests directories
+
+**Follow-ups**
+- [Optional] Add double-click handler in frontend to call drill-down endpoint
+- [Optional] Add file content preview endpoint for selected files
+- [Optional] Generate actual AI-powered insights using LLM
+- [Required] Test frontend UI with real connected repo data
+
+---
+
 ## 2026-02-26: Dashboard Repo Docking Workbench - Target Repository Connection
 
 **Summary**
