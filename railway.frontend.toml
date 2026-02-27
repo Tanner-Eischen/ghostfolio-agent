@@ -1,11 +1,11 @@
-# Railway Configuration for Ghostfolio Agent Frontend (Streamlit)
+# Railway Configuration for Ghostfolio Agent Frontend (React)
 
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile.frontend"
 
 [deploy]
-healthcheckPath = "/_stcore/health"
+healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

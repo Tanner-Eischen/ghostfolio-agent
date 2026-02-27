@@ -50,8 +50,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser
+# Create non-root user and data directory with proper permissions
+RUN useradd --create-home --shell /bin/bash appuser && \
+    mkdir -p /app/data && \
+    chown -R appuser:appuser /app/data
+
+# Set data directory environment variable
+ENV DATA_DIR=/app/data
+
 USER appuser
 
 # Copy application code
