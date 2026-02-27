@@ -34,7 +34,7 @@ from src.utils.config_store import (
 from src.utils.langsmith_client import get_recent_runs, get_run_details
 from src.utils.logging import get_logger, setup_logging
 from src.utils.tracing import log_feedback, is_tracing_enabled
-from src.utils.usage_tracker import get_usage_stats, get_cost_projections
+from src.utils.usage_tracker import get_cost_by_run_id, get_cost_projections, get_usage_stats
 from src.repo.manager import (
     ensure_git_on_path,
     get_repo_manager,
@@ -175,6 +175,8 @@ class ChatResponse(BaseModel):
     verification_passed: bool = Field(default=True, description="Whether verification passed")
     requires_escalation: bool = Field(default=False, description="Whether human review recommended")
     processing_time_ms: float = Field(..., description="Processing time in milliseconds")
+    run_id: str | None = Field(None, description="LangSmith run ID for feedback and trace link")
+    trace_url: str | None = Field(None, description="URL to view trace in LangSmith")
 
 
 class HealthResponse(BaseModel):
@@ -325,6 +327,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
             verification_passed=result["verification_passed"],
             requires_escalation=result["requires_escalation"],
             processing_time_ms=result["metadata"].get("processing_time_ms", 0),
+            run_id=result.get("run_id"),
+            trace_url=result.get("trace_url"),
         )
 
     except Exception as e:
@@ -2582,6 +2586,7 @@ class TraceDetailResponse(TraceResponse):
     """Trace detail response model."""
 
     steps: list[dict[str, Any]] = Field(default_factory=list, description="Execution steps")
+    cost_usd: float | None = Field(None, description="Recorded cost for this run when linked via run_id")
 
 
 @app.get("/traces", response_model=list[TraceResponse], tags=["Traces"])
@@ -2621,6 +2626,8 @@ async def get_trace_detail(trace_id: str) -> TraceDetailResponse:
     if not run:
         raise HTTPException(status_code=404, detail="Trace not found")
 
+    cost_usd = get_cost_by_run_id(trace_id)
+
     return TraceDetailResponse(
         id=run["id"],
         timestamp=run["timestamp"] or "",
@@ -2629,6 +2636,7 @@ async def get_trace_detail(trace_id: str) -> TraceDetailResponse:
         status=run["status"],
         tool_calls=run.get("tool_calls", []),
         steps=run.get("steps", []),
+        cost_usd=cost_usd,
     )
 
 
@@ -2745,6 +2753,14 @@ async def get_eval_results() -> EvalResultsResponse:
 # ============================================================================
 
 
+class UsageByModel(BaseModel):
+    """Per-model usage stats."""
+
+    requests: int = Field(..., description="Request count for this model")
+    tokens: int = Field(..., description="Total tokens for this model")
+    cost: float = Field(..., description="Total cost in USD for this model")
+
+
 class UsageStatsResponse(BaseModel):
     """Usage stats response model."""
 
@@ -2752,6 +2768,10 @@ class UsageStatsResponse(BaseModel):
     total_tokens: int = Field(..., description="Total tokens used")
     requests_count: int = Field(..., description="Total requests count")
     avg_cost_per_request: float = Field(..., description="Average cost per request")
+    by_model: dict[str, UsageByModel] = Field(
+        default_factory=dict,
+        description="Breakdown by model (requests, tokens, cost)",
+    )
 
 
 class CostProjectionsResponse(BaseModel):
@@ -2770,11 +2790,16 @@ async def get_usage_stats_endpoint() -> UsageStatsResponse:
     Returns current usage and cost data from the usage tracker.
     """
     stats = get_usage_stats()
+    by_model = {
+        model: UsageByModel(requests=data["requests"], tokens=data["tokens"], cost=data["cost"])
+        for model, data in stats.get("by_model", {}).items()
+    }
     return UsageStatsResponse(
         total_cost=stats["total_cost"],
         total_tokens=stats["total_tokens"],
         requests_count=stats["requests_count"],
         avg_cost_per_request=stats["avg_cost_per_request"],
+        by_model=by_model,
     )
 
 

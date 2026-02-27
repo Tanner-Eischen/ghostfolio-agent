@@ -7,6 +7,7 @@ const emptyUsage: UsageStats = {
   total_tokens: 0,
   requests_count: 0,
   avg_cost_per_request: 0,
+  by_model: {},
 };
 
 const emptyProjections: CostProjections = {
@@ -348,10 +349,13 @@ export function ObservabilityCost() {
                     <div className="text-xl font-bold text-white mt-1">{selectedTrace.tool_calls?.length || 0}</div>
                   </div>
                   <div className="bg-surface-dark border border-surface-border rounded-lg p-3">
-                    <span className="text-text-dim text-[10px] uppercase">Est. Cost</span>
+                    <span className="text-text-dim text-[10px] uppercase">
+                      {selectedTrace.cost_usd != null ? 'Cost' : 'Est. Cost'}
+                    </span>
                     <div className="text-xl font-bold text-primary mt-1">
-                      {/* Using GPT-4o-mini pricing: $0.60/1M tokens (blended avg of input/output) */}
-                      ${((selectedTrace.tokens_used / 1000000) * 0.60).toFixed(4)}
+                      {selectedTrace.cost_usd != null
+                        ? `$${selectedTrace.cost_usd.toFixed(4)}`
+                        : `$${((selectedTrace.tokens_used / 1000000) * 0.60).toFixed(4)}`}
                     </div>
                   </div>
                 </div>
@@ -527,6 +531,24 @@ export function ObservabilityCost() {
                 <div className="text-[10px] text-text-dim">12-month estimate</div>
               </div>
             </div>
+
+            {/* Cost by model */}
+            {usage.by_model && Object.keys(usage.by_model).length > 0 && (
+              <div className="mt-4 p-3 bg-surface-dark rounded-lg border border-surface-border">
+                <h4 className="text-xs font-semibold text-text-dim mb-2">Cost by Model</h4>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {Object.entries(usage.by_model).map(([model, data]) => (
+                    <div key={model} className="flex justify-between items-center text-xs">
+                      <span className="text-white truncate max-w-[140px]" title={model}>{model}</span>
+                      <span className="text-primary font-medium">${data.cost.toFixed(4)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[10px] text-text-dim mt-2">
+                  {Object.values(usage.by_model).reduce((a, b) => a + b.requests, 0)} requests
+                </div>
+              </div>
+            )}
 
             {/* Pricing Reference */}
             <div className="mt-4 p-3 bg-surface-dark rounded-lg border border-surface-border">

@@ -15,12 +15,13 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langsmith import traceable
+from langsmith.run_helpers import get_current_run_tree
 
 from src.agent.prompts import SYSTEM_PROMPT
 from src.tools import ALL_TOOLS
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
-from src.utils.tracing import configure_langsmith, is_tracing_enabled, TraceContext
+from src.utils.tracing import configure_langsmith, get_trace_url, is_tracing_enabled, TraceContext
 from src.utils.usage_tracker import log_usage
 from src.verification import VerificationPipeline
 
@@ -161,8 +162,37 @@ class GhostfolioAgent:
 
         result = await self.graph.ainvoke(inputs, config)
 
-        # Extract the last AI message
+        run_id: str | None = None
+        try:
+            run_tree = get_current_run_tree()
+            if run_tree and hasattr(run_tree, "id"):
+                run_id = str(run_tree.id)
+        except Exception as run_err:
+            self.logger.debug(f"Could not get current run id: {run_err}")
+
         messages = result.get("messages", [])
+        last_ai_message: AIMessage | None = None
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage):
+                last_ai_message = msg
+                break
+
+        if last_ai_message:
+            usage_meta = (
+                getattr(last_ai_message, "response_metadata", None) or {}
+            ).get("token_usage", {}) or {}
+            input_tokens = usage_meta.get("prompt_tokens", 0)
+            output_tokens = usage_meta.get("completion_tokens", 0)
+            log_usage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=self.llm.model_name,
+                session_id=None,
+                query=message[:100] if message else None,
+                run_id=run_id,
+                metadata={"token_usage_missing": input_tokens == 0 and output_tokens == 0},
+            )
+
         for msg in reversed(messages):
             if isinstance(msg, AIMessage):
                 return msg.content
@@ -246,6 +276,15 @@ class GhostfolioAgent:
             result = await self.graph.ainvoke(inputs, config)
             llm_end_time = time.time()
 
+            # Get LangSmith run ID early so we can attach it to usage log and response
+            run_id: str | None = None
+            try:
+                run_tree = get_current_run_tree()
+                if run_tree and hasattr(run_tree, "id"):
+                    run_id = str(run_tree.id)
+            except Exception as run_err:
+                self.logger.debug(f"Could not get current run id: {run_err}")
+
             # Calculate LLM time (includes tool execution within LangGraph)
             timing_breakdown["llm_time_ms"] = round((llm_end_time - llm_start_time) * 1000, 2)
 
@@ -317,20 +356,23 @@ class GhostfolioAgent:
                     last_ai_message = msg
                     break
 
-            # Log token usage if available
-            if last_ai_message and hasattr(last_ai_message, "response_metadata"):
-                usage_meta = last_ai_message.response_metadata.get("token_usage", {})
-                if usage_meta:
-                    input_tokens = usage_meta.get("prompt_tokens", 0)
-                    output_tokens = usage_meta.get("completion_tokens", 0)
-                    if input_tokens > 0 or output_tokens > 0:
-                        log_usage(
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            model=self.llm.model_name,
-                            session_id=session_id,
-                            query=message[:100] if message else None,
-                        )
+            # Log token usage (include run_id so Observability can show cost per trace).
+            # When token_usage is missing, log 0 tokens with a flag so the request is still counted.
+            if last_ai_message:
+                usage_meta = (
+                    getattr(last_ai_message, "response_metadata", None) or {}
+                ).get("token_usage", {}) or {}
+                input_tokens = usage_meta.get("prompt_tokens", 0)
+                output_tokens = usage_meta.get("completion_tokens", 0)
+                log_usage(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    model=self.llm.model_name,
+                    session_id=session_id,
+                    query=message[:100] if message else None,
+                    run_id=run_id,
+                    metadata={"token_usage_missing": input_tokens == 0 and output_tokens == 0},
+                )
 
             # Extract ALL tool calls from all messages (not just final response)
             for msg in response_messages:
@@ -402,6 +444,8 @@ class GhostfolioAgent:
                 timing_breakdown["tool_time_ms"] = round(timing_breakdown["llm_time_ms"] * 0.2, 2)
                 timing_breakdown["llm_time_ms"] = round(timing_breakdown["llm_time_ms"] * 0.8, 2)
 
+            trace_url = get_trace_url(run_id) if run_id else None
+
             out = {
                 "message": response_text,
                 "session_id": session_id,
@@ -412,6 +456,8 @@ class GhostfolioAgent:
                 "verification_passed": verification_report.passed if verification_report else True,
                 "requires_escalation": verification_report.escalation.requires_escalation if verification_report else False,
                 "escalation_triggers": verification_report.escalation.triggers if verification_report else [],
+                "run_id": run_id,
+                "trace_url": trace_url,
                 "metadata": {
                     "processing_time_ms": round(processing_time * 1000, 2),
                     "tools_used": len(tool_calls),
@@ -423,6 +469,15 @@ class GhostfolioAgent:
 
         except Exception as e:
             self.logger.error(f"Chat error: {e}")
+            run_id_err: str | None = None
+            trace_url_err: str | None = None
+            try:
+                run_tree = get_current_run_tree()
+                if run_tree and hasattr(run_tree, "id"):
+                    run_id_err = str(run_tree.id)
+                    trace_url_err = get_trace_url(run_id_err)
+            except Exception:
+                pass
             return {
                 "message": f"I encountered an error: {str(e)}",
                 "session_id": session_id,
@@ -432,6 +487,8 @@ class GhostfolioAgent:
                 "verification_passed": False,
                 "requires_escalation": True,
                 "escalation_triggers": [f"Error: {str(e)}"],
+                "run_id": run_id_err,
+                "trace_url": trace_url_err,
                 "metadata": {
                     "processing_time_ms": round((time.time() - start_time) * 1000, 2),
                     "error": str(e),

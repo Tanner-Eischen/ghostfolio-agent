@@ -111,6 +111,7 @@ def log_usage(
     session_id: str | None = None,
     query: str | None = None,
     metadata: dict[str, Any] | None = None,
+    run_id: str | None = None,
 ) -> float:
     """Log an API usage event.
 
@@ -121,15 +122,17 @@ def log_usage(
         session_id: Optional session ID
         query: Optional query text (truncated)
         metadata: Optional additional metadata
+        run_id: Optional LangSmith run ID to link this usage to a trace
 
     Returns:
         Calculated cost in USD
     """
-    cost = calculate_cost(input_tokens, output_tokens, model)
+    model_str = model if isinstance(model, str) else str(model)
+    cost = calculate_cost(input_tokens, output_tokens, model_str)
 
     entry = {
         "timestamp": datetime.utcnow().isoformat(),
-        "model": model,
+        "model": model_str,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
@@ -137,6 +140,7 @@ def log_usage(
         "session_id": session_id,
         "query": query[:100] if query else None,  # Truncate query
         "metadata": metadata or {},
+        "run_id": run_id,
     }
 
     log = _load_usage_log()
@@ -145,6 +149,22 @@ def log_usage(
 
     logger.debug(f"Usage logged: {input_tokens}+{output_tokens} tokens, ${cost:.4f}")
     return cost
+
+
+def get_cost_by_run_id(run_id: str) -> float | None:
+    """Get recorded cost for a LangSmith run ID, if any.
+
+    Args:
+        run_id: LangSmith run ID (trace id)
+
+    Returns:
+        Cost in USD if found, None otherwise
+    """
+    log = _load_usage_log()
+    for entry in reversed(log):  # Most recent first
+        if entry.get("run_id") == run_id:
+            return entry.get("cost_usd")
+    return None
 
 
 def get_usage_stats() -> dict[str, Any]:
@@ -253,6 +273,7 @@ __all__ = [
     "log_usage",
     "get_usage_stats",
     "get_cost_projections",
+    "get_cost_by_run_id",
     "calculate_cost",
     "reset_usage_log",
     "MODEL_PRICING",

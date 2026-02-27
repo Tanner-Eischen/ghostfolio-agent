@@ -1,5 +1,34 @@
 # Lessons Learned
 
+## 2026-02-27: Observability and Costs Plan Implementation
+
+**Summary**
+- Feedback ↔ trace: Agent returns LangSmith `run_id` and `trace_url` in chat response; frontend uses `run_id` as message id when submitting feedback so feedback attaches to the correct run.
+- Per-trace cost: `log_usage()` accepts optional `run_id`; usage log entries store `run_id`; `get_cost_by_run_id(run_id)` added; trace detail API and Observability UI show actual cost when available, else fall back to token-based estimate.
+- Cost robustness: Every chat response (with a last AI message) is logged; when `token_usage` is missing we log 0 tokens with `metadata.token_usage_missing: true`.
+- Exposed `by_model` in `UsageStatsResponse` and added "Cost by Model" section on Observability page.
+- `agent.chat()` (simple) now calls `log_usage()` for consistency with `chat_with_context`.
+
+**Why**
+- Audit found feedback was sent with client-generated message id, so it never attached to the real LangSmith run; trace and cost data were not linked; per-trace "Est. Cost" was a hardcoded formula; `by_model` was computed but not exposed.
+
+**What worked / what didn't**
+- **Worked**: `get_current_run_tree()` from `langsmith.run_helpers` used inside `@traceable` methods to obtain run id after `ainvoke`; run_id captured early in `chat_with_context` and passed to `log_usage`; usage_tracker normalizes `model` to string so tests with mocked LLM don't break JSON serialization.
+
+**Assumptions**
+- LangSmith tracing is enabled when feedback/trace URLs are used; optional fields (`run_id`, `trace_url`, `cost_usd`) are backward compatible.
+
+**Edge cases**
+- Missing `token_usage`: request still counted with 0 cost and flag. Trace list has no `cost_usd` (only detail does); UI shows "Cost" when backend provides it, "Est. Cost" otherwise.
+
+**Verification**
+- `pytest tests/test_agent/test_core.py::TestGhostfolioAgentChat::test_chat_simple` — passed. Lint clean on modified files.
+
+**Follow-ups**
+- [Optional] Add route tests for GET /traces/:id including cost_usd and for GET /finances/usage including by_model.
+
+---
+
 ## 2026-02-26: Clone Failed When Connecting a Repository
 
 **Summary**

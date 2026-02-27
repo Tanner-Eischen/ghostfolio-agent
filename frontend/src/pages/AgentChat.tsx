@@ -410,7 +410,7 @@ export function AgentChat() {
       }, abortControllerRef.current.signal);
 
       const assistantMessage: Message = {
-        id: `msg-${Date.now()}-response`,
+        id: response.run_id ?? `msg-${Date.now()}-response`,
         role: 'assistant',
         content: response.response,
         timestamp: new Date(),

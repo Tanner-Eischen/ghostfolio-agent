@@ -73,6 +73,10 @@ export interface ChatResponse {
   verification_passed: boolean;
   requires_escalation: boolean;
   processing_time_ms: number;
+  /** LangSmith run ID; use as message_id when submitting feedback so it attaches to the trace */
+  run_id?: string | null;
+  /** URL to view this run in LangSmith */
+  trace_url?: string | null;
 }
 
 export const chatApi = {
@@ -132,15 +136,21 @@ export interface RepoInfo {
 export interface DependencyNode {
   id: string;
   name: string;
-  type: 'agent' | 'service' | 'database' | 'api';
+  type: 'agent' | 'service' | 'database' | 'api' | string;
   icon: string;
-  color: 'primary' | 'indigo' | 'emerald' | 'slate';
+  color: 'primary' | 'indigo' | 'emerald' | 'slate' | string;
+  file_count?: number;
+  line_count?: number;
+  external_deps?: string[];
+  has_circular?: boolean;
 }
 
 export interface DependencyEdge {
   source: string;
   target: string;
   label?: string;
+  weight?: number;
+  import_types?: string[];
 }
 
 export interface DependenciesGraph {
@@ -336,6 +346,8 @@ export interface TraceDetail extends Trace {
     output: unknown;
     duration_ms: number;
   }>;
+  /** Recorded cost for this run when linked via run_id; null if not available */
+  cost_usd: number | null;
 }
 
 export const tracesApi = {
@@ -375,11 +387,18 @@ export const evalsApi = {
 };
 
 // Finances API (new)
+export interface UsageByModel {
+  requests: number;
+  tokens: number;
+  cost: number;
+}
+
 export interface UsageStats {
   total_cost: number;
   total_tokens: number;
   requests_count: number;
   avg_cost_per_request: number;
+  by_model: Record<string, UsageByModel>;
 }
 
 export interface CostProjections {
