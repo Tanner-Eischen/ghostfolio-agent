@@ -4,10 +4,11 @@ interface ApiOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 async function fetchApi<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
-  const { method = 'GET', body, headers = {} } = options;
+  const { method = 'GET', body, headers = {}, signal } = options;
 
   const config: RequestInit = {
     method,
@@ -15,6 +16,7 @@ async function fetchApi<T>(endpoint: string, options: ApiOptions = {}): Promise<
       'Content-Type': 'application/json',
       ...headers,
     },
+    signal,
   };
 
   if (body) {
@@ -54,6 +56,7 @@ export interface ChatRequest {
   message: string;
   session_id?: string;
   user_id?: string;
+  repo_id?: string;
 }
 
 export interface ChatResponse {
@@ -65,6 +68,7 @@ export interface ChatResponse {
     args: Record<string, unknown>;
     result?: unknown;
   }>;
+  tool_outputs: unknown[];  // Tool execution results
   session_id: string;
   verification_passed: boolean;
   requires_escalation: boolean;
@@ -72,7 +76,7 @@ export interface ChatResponse {
 }
 
 export const chatApi = {
-  send: (request: ChatRequest) => fetchApi<ChatResponse>('/chat', { method: 'POST', body: request }),
+  send: (request: ChatRequest, signal?: AbortSignal) => fetchApi<ChatResponse>('/chat', { method: 'POST', body: request, signal }),
   getTools: () => fetchApi<Array<{ name: string; description: string }>>('/chat/tools'),
 };
 
@@ -236,8 +240,6 @@ export interface CodebaseInsight {
   architecture: string;
   recommendations: string[];
 }
-    fetchApi<DependenciesGraph>(`/repo/${repoId}/dependencies/${moduleName}`),
-};
 
 // Strategy API (new)
 export interface StrategyConfig {
@@ -273,8 +275,34 @@ export interface Tool {
 
 export const toolsApi = {
   list: () => fetchApi<Tool[]>('/tools'),
+  get: (toolName: string) => fetchApi<ToolDetail>(`/tools/${toolName}`),
+  execute: (toolName: string, params: Record<string, unknown>, repoId?: string) =>
+    fetchApi<ToolExecuteResponse>(`/tools/${toolName}/execute`, {
+      method: 'POST',
+      body: { parameters: params, repo_id: repoId },
+    }),
   create: (tool: Omit<Tool, 'id'>) => fetchApi<Tool>('/tools', { method: 'POST', body: tool }),
 };
+
+// Tool Detail types
+export interface ToolDetail {
+  id: string;
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  status: string;
+  args_schema: Record<string, unknown> | null;
+  execution_count: number;
+}
+
+// Tool Execute types
+export interface ToolExecuteResponse {
+  tool_name: string;
+  success: boolean;
+  result: unknown;
+  execution_time_ms: number;
+  repo_context: string | null;
+}
 
 // Verification API (new)
 export interface VerificationConfig {
@@ -368,4 +396,74 @@ export const financesApi = {
   getUsage: () => fetchApi<UsageStats>('/finances/usage'),
   getProjections: (queriesPerDay?: number) =>
     fetchApi<CostProjections>(`/finances/projections${queriesPerDay ? `?queries_per_day=${queriesPerDay}` : ''}`),
+};
+
+// Tool Suggestions API (Page 2 - Tool Library)
+export interface ToolSuggestionParameter {
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+}
+
+export interface ToolSuggestion {
+  id: string;
+  name: string;
+  description: string;
+  source_type: string;
+  source_file: string | null;
+  source_line: number | null;
+  parameters: ToolSuggestionParameter[];
+  priority: string;
+  reasoning: string;
+}
+
+export interface ToolSuggestionsResponse {
+  repo_id: string;
+  repo_name: string;
+  suggestions: ToolSuggestion[];
+  total_suggestions: number;
+  analysis_summary: string;
+}
+
+export interface GeneratedToolResponse {
+  id: string;
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  generated_code: string;
+  status: string;
+  source_suggestion_id: string;
+}
+
+export interface GenerateToolRequest {
+  suggestion_id: string;
+  custom_name?: string;
+  custom_description?: string;
+}
+
+export const toolSuggestionsApi = {
+  getForRepo: (repoId: string) =>
+    fetchApi<ToolSuggestionsResponse>(`/repo/${repoId}/tool-suggestions`),
+  generateTool: (repoId: string, request: GenerateToolRequest) =>
+    fetchApi<GeneratedToolResponse>(`/repo/${repoId}/generate-tool`, { method: 'POST', body: request }),
+};
+
+// Feedback API
+export interface FeedbackRequest {
+  message_id: string;
+  session_id: string;
+  rating: -1 | 1 | 2 | 3 | 4 | 5;  // -1=thumbs down, 1=thumbs up, 2-5=stars
+  comment?: string;
+}
+
+export interface FeedbackResponse {
+  status: string;
+  message_id: string;
+  logged: boolean;
+}
+
+export const feedbackApi = {
+  send: (request: FeedbackRequest) =>
+    fetchApi<FeedbackResponse>('/feedback', { method: 'POST', body: request }),
 };

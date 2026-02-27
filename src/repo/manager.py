@@ -27,9 +27,11 @@ CLONE_TIMEOUT_SECONDS = 60
 
 # Security: Blocked protocols and patterns
 BLOCKED_PROTOCOLS = {"file", "ftp", "sftp", "ssh"}
+# Note: Removed C:\Users to allow connecting local project directories
+# Path traversal and other checks still protect against misuse
 SENSITIVE_PATHS = {
     "/etc", "/root", "/home", "/var", "/usr", "/bin", "/sbin",
-    "C:\\Windows", "C:\\Program Files", "C:\\Users",
+    "C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)",
 }
 
 # Path traversal patterns to block

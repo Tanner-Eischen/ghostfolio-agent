@@ -13,6 +13,7 @@ Task #15: Create FastAPI backend
 import ast
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 import uuid
@@ -123,6 +124,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000, description="User message")
     session_id: str | None = Field(None, description="Session ID for conversation continuity")
     user_id: str | None = Field(None, description="Optional user identifier")
+    repo_id: str | None = Field(None, description="Optional repo context for tool execution")
 
 
 class ChatResponse(BaseModel):
@@ -132,6 +134,7 @@ class ChatResponse(BaseModel):
     confidence: float = Field(..., ge=0, le=100, description="Confidence score (0-100)")
     confidence_level: str = Field(..., description="Confidence level label")
     tool_calls: list[dict[str, Any]] = Field(default_factory=list, description="Tools invoked")
+    tool_outputs: list[Any] = Field(default_factory=list, description="Tool execution results")
     session_id: str = Field(..., description="Session ID for follow-up queries")
     verification_passed: bool = Field(default=True, description="Whether verification passed")
     requires_escalation: bool = Field(default=False, description="Whether human review recommended")
@@ -243,7 +246,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     an AI-powered response with confidence scoring and verification.
 
     Args:
-        request: Chat request with message and optional session ID
+        request: Chat request with message, optional session ID, and optional repo context
 
     Returns:
         Agent response with confidence, tool calls, and verification status
@@ -254,11 +257,17 @@ async def chat(request: ChatRequest) -> ChatResponse:
         # Generate session ID if not provided
         session_id = request.session_id or str(uuid.uuid4())
 
+        # Build context with repo_id if provided
+        context = {}
+        if request.repo_id:
+            context["repo_id"] = request.repo_id
+
         # Call agent
         result = await agent.chat_with_context(
             message=request.message,
             session_id=session_id,
             user_id=request.user_id,
+            context=context if context else None,
         )
 
         return ChatResponse(
@@ -266,6 +275,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
             confidence=result["confidence"],
             confidence_level=result["confidence_level"],
             tool_calls=result["tool_calls"],
+            tool_outputs=result.get("tool_outputs", []),
             session_id=result["session_id"],
             verification_passed=result["verification_passed"],
             requires_escalation=result["requires_escalation"],
@@ -720,6 +730,20 @@ async def get_repo_info() -> RepoInfoResponse:
     )
 
 
+@app.get("/repo/dependencies", response_model=DependenciesResponse, tags=["Repo"])
+async def get_repo_dependencies() -> DependenciesResponse:
+    """Get repository dependency graph.
+
+    Returns a graph structure with nodes (services, databases, etc.)
+    and edges (relationships between them).
+
+    This analyzes the codebase structure and imports to build
+    a dependency graph for the mapper visualization.
+    """
+    nodes, edges = _analyze_repo_dependencies()
+    return DependenciesResponse(nodes=nodes, edges=edges)
+
+
 @app.get("/repo/{repo_id}", response_model=RepoInfoResponse, tags=["Repo"])
 async def get_connected_repo_info(repo_id: str) -> RepoInfoResponse:
     """Get analysis for a connected repository.
@@ -925,7 +949,7 @@ def _detect_modules(target_path: Path | None = None) -> list[str]:
 
 
 def _get_version(target_path: Path | None = None) -> str:
-    """Get version from pyproject.toml or git.
+    """Get version from pyproject.toml, __init__.py, or git.
 
     Args:
         target_path: Optional path to target repository. If None, uses ghostfolio-agent's root
@@ -933,6 +957,7 @@ def _get_version(target_path: Path | None = None) -> str:
     Returns:
         Version string
     """
+    import re
     import subprocess
 
     repo_root = target_path or Path(__file__).parent.parent.parent
@@ -942,14 +967,39 @@ def _get_version(target_path: Path | None = None) -> str:
     if pyproject_path.exists():
         try:
             content = pyproject_path.read_text(encoding="utf-8")
-            # Simple regex-free parsing for version
             for line in content.split("\n"):
                 if line.startswith("version ="):
+                    # Skip dynamic version specs like: version = { source = "file", ... }
+                    if "{" in line:
+                        # Try to extract path from dynamic version spec
+                        match = re.search(r'path\s*=\s*["\']([^"\']+)["\']', line)
+                        if match:
+                            init_path = repo_root / match.group(1)
+                            if init_path.exists():
+                                init_content = init_path.read_text(encoding="utf-8")
+                                # Look for __version__ = "x.y.z"
+                                version_match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', init_content)
+                                if version_match:
+                                    version = version_match.group(1)
+                                    return f"v{version}" if not version.startswith("v") else version
+                        continue
+
                     version = line.split("=")[1].strip().strip('"').strip("'")
-                    if version:
+                    if version and not version.startswith("{"):
                         return f"v{version}" if not version.startswith("v") else version
         except Exception:
             pass
+
+    # Try to find version in __init__.py files
+    for init_file in repo_root.rglob("__init__.py"):
+        try:
+            content = init_file.read_text(encoding="utf-8")
+            match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+            if match:
+                version = match.group(1)
+                return f"v{version}" if not version.startswith("v") else version
+        except Exception:
+            continue
 
     # Try git describe
     try:
@@ -1192,20 +1242,6 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
             edges.append(DependencyEdge(source="agent-core", target="module-verification", label="verifies"))
 
     return nodes, edges
-
-
-@app.get("/repo/dependencies", response_model=DependenciesResponse, tags=["Repo"])
-async def get_repo_dependencies() -> DependenciesResponse:
-    """Get repository dependency graph.
-
-    Returns a graph structure with nodes (services, databases, etc.)
-    and edges (relationships between them).
-
-    This analyzes the codebase structure and imports to build
-    a dependency graph for the mapper visualization.
-    """
-    nodes, edges = _analyze_repo_dependencies()
-    return DependenciesResponse(nodes=nodes, edges=edges)
 
 
 @app.get("/repo/{repo_id}/dependencies", response_model=DependenciesResponse, tags=["Repo"])
@@ -1588,6 +1624,134 @@ async def list_tools_registry() -> list[ToolResponse]:
     ]
 
 
+class ToolDetailResponse(BaseModel):
+    """Detailed tool response model."""
+
+    id: str = Field(..., description="Tool ID")
+    name: str = Field(..., description="Tool name")
+    description: str = Field(..., description="Tool description")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Tool parameters schema")
+    status: str = Field(default="active", description="Tool status")
+    args_schema: dict[str, Any] | None = Field(default=None, description="Full JSON schema")
+    execution_count: int = Field(default=0, description="Number of times executed")
+
+
+@app.get("/tools/{tool_name}", response_model=ToolDetailResponse, tags=["Tools"])
+async def get_tool_detail(tool_name: str) -> ToolDetailResponse:
+    """Get detailed information about a specific tool.
+
+    Args:
+        tool_name: Name of the tool to retrieve
+
+    Returns:
+        ToolDetailResponse with full tool information
+    """
+    schema = get_tool_schema(tool_name)
+    if not schema:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+
+    return ToolDetailResponse(
+        id=tool_name,
+        name=schema["name"],
+        description=schema["description"],
+        parameters=schema["parameters"],
+        status="active",
+        args_schema=schema.get("args_schema"),
+        execution_count=0,  # TODO: Track execution counts
+    )
+
+
+class ToolExecuteRequest(BaseModel):
+    """Request to execute a tool."""
+
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Tool parameters")
+    repo_id: str | None = Field(default=None, description="Optional repo ID for context")
+
+
+class ToolExecuteResponse(BaseModel):
+    """Response from tool execution."""
+
+    tool_name: str = Field(..., description="Name of the executed tool")
+    success: bool = Field(..., description="Whether execution succeeded")
+    result: Any = Field(..., description="Tool execution result")
+    execution_time_ms: float = Field(..., description="Execution time in milliseconds")
+    repo_context: str | None = Field(default=None, description="Repository context if provided")
+
+
+@app.post("/tools/{tool_name}/execute", response_model=ToolExecuteResponse, tags=["Tools"])
+async def execute_tool(tool_name: str, request: ToolExecuteRequest) -> ToolExecuteResponse:
+    """Execute a tool with optional repository context.
+
+    This endpoint allows executing registered tools with data from
+    the connected repository (Page 1 analysis).
+
+    Args:
+        tool_name: Name of the tool to execute
+        request: Execution request with parameters and optional repo context
+
+    Returns:
+        ToolExecuteResponse with the result
+    """
+    import time
+
+    tool = get_tool_schema(tool_name)
+    if not tool:
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+
+    # Get repo context if provided
+    repo_context = None
+    if request.repo_id:
+        manager = get_repo_manager()
+        connection = manager.get_connection(request.repo_id)
+        if connection:
+            repo_context = connection.name
+
+    start_time = time.time()
+
+    try:
+        # Execute the tool
+        # For now, we use the agent's tools which are async
+        from src.tools import ALL_TOOLS
+
+        target_tool = None
+        for t in ALL_TOOLS:
+            if t.name == tool_name:
+                target_tool = t
+                break
+
+        if not target_tool:
+            raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found in registry")
+
+        # Execute with provided parameters
+        result = await target_tool.ainvoke(request.parameters)
+
+        execution_time = (time.time() - start_time) * 1000
+
+        # Handle Pydantic model results
+        if hasattr(result, "model_dump"):
+            result = result.model_dump(mode="json")
+
+        return ToolExecuteResponse(
+            tool_name=tool_name,
+            success=True,
+            result=result,
+            execution_time_ms=round(execution_time, 2),
+            repo_context=repo_context,
+        )
+
+    except Exception as e:
+        execution_time = (time.time() - start_time) * 1000
+        logger.error(f"Tool execution failed: {e}")
+
+        return ToolExecuteResponse(
+            tool_name=tool_name,
+            success=False,
+            result={"error": str(e)},
+            execution_time_ms=round(execution_time, 2),
+            repo_context=repo_context,
+        )
+
+
 @app.post("/tools", response_model=ToolResponse, tags=["Tools"])
 async def create_tool(request: ToolCreateRequest) -> ToolResponse:
     """Create a new tool (placeholder for future dynamic tool creation).
@@ -1607,6 +1771,315 @@ async def create_tool(request: ToolCreateRequest) -> ToolResponse:
         description=request.description,
         parameters=request.parameters,
         status="inactive",  # Mark as inactive since it's not actually registered
+    )
+
+
+# ============================================================================
+# Repo-Based Tool Suggestion Endpoints (Page 2 - Tool Library)
+# ============================================================================
+
+
+class ToolSuggestionParameter(BaseModel):
+    """A parameter for a suggested tool."""
+
+    name: str = Field(..., description="Parameter name")
+    type: str = Field(..., description="Parameter type (string, number, array, object)")
+    description: str = Field(..., description="Parameter description")
+    required: bool = Field(default=True, description="Whether the parameter is required")
+
+
+class ToolSuggestion(BaseModel):
+    """A suggested tool based on repository analysis."""
+
+    id: str = Field(..., description="Unique suggestion ID")
+    name: str = Field(..., description="Suggested tool name")
+    description: str = Field(..., description="What this tool would do")
+    source_type: str = Field(..., description="How this was detected: endpoint, pattern, dependency")
+    source_file: str | None = Field(default=None, description="File where this was detected")
+    source_line: int | None = Field(default=None, description="Line number if applicable")
+    parameters: list[ToolSuggestionParameter] = Field(default_factory=list, description="Suggested parameters")
+    priority: str = Field(default="medium", description="Suggestion priority: high, medium, low")
+    reasoning: str = Field(..., description="Why this tool is suggested")
+
+
+class ToolSuggestionsResponse(BaseModel):
+    """Response for tool suggestions based on repo analysis."""
+
+    repo_id: str = Field(..., description="Repository ID")
+    repo_name: str = Field(..., description="Repository name")
+    suggestions: list[ToolSuggestion] = Field(default_factory=list, description="Tool suggestions")
+    total_suggestions: int = Field(..., description="Total number of suggestions")
+    analysis_summary: str = Field(..., description="Summary of the analysis")
+
+
+class GeneratedToolResponse(BaseModel):
+    """Response for a generated tool."""
+
+    id: str = Field(..., description="Generated tool ID")
+    name: str = Field(..., description="Tool name")
+    description: str = Field(..., description="Tool description")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Tool parameters")
+    generated_code: str = Field(..., description="Generated Python code for the tool")
+    status: str = Field(default="generated", description="Tool status")
+    source_suggestion_id: str = Field(..., description="ID of the suggestion this was generated from")
+
+
+@app.get("/repo/{repo_id}/tool-suggestions", response_model=ToolSuggestionsResponse, tags=["Tools"])
+async def get_tool_suggestions(repo_id: str) -> ToolSuggestionsResponse:
+    """Get tool suggestions based on repository analysis.
+
+    Analyzes the connected repository's injection points, dependencies,
+    and insights to suggest tools that could be created for agent integration.
+
+    This connects Page 1 (Dashboard analysis) to Page 2 (Tool Library).
+
+    Args:
+        repo_id: The connection ID from Page 1
+
+    Returns:
+        ToolSuggestionsResponse with suggested tools based on repo analysis
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+    connection = manager.get_connection(repo_id)
+
+    if not repo_path or not connection:
+        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    suggestions: list[ToolSuggestion] = []
+
+    # 1. Get injection points and convert to tool suggestions
+    injection_points_data = await get_injection_points(repo_id, limit=50)
+
+    for point in injection_points_data.points:
+        # Determine priority based on route type
+        priority = "high" if point.route_type in ["POST", "PUT"] else "medium"
+
+        # Extract parameters from route path
+        params: list[ToolSuggestionParameter] = []
+        import re
+        path_params = re.findall(r'\{(\w+)\}', point.route_path)
+        for param in path_params:
+            params.append(ToolSuggestionParameter(
+                name=param,
+                type="string",
+                description=f"Path parameter: {param}",
+                required=True,
+            ))
+
+        # Generate tool name from route
+        tool_name = point.route_path.replace("/", "_").replace("{", "").replace("}", "").strip("_")
+        if not tool_name:
+            tool_name = f"{point.route_type.lower()}_endpoint"
+
+        suggestions.append(ToolSuggestion(
+            id=f"inj-{hash(point.file_path + str(point.line_number)) % 100000}",
+            name=f"{tool_name}_tool",
+            description=f"Tool to interact with {point.route_type} {point.route_path} endpoint",
+            source_type="endpoint",
+            source_file=point.file_path,
+            source_line=point.line_number,
+            parameters=params,
+            priority=priority,
+            reasoning=f"Detected {point.route_type} route at {point.route_path} - agent could use this to interact with the API",
+        ))
+
+    # 2. Get insights and add pattern-based suggestions
+    insights_data = await get_codebase_insights(repo_id)
+
+    # Add suggestions based on architecture
+    arch_lower = insights_data.architecture.lower()
+    if "fastapi" in arch_lower:
+        suggestions.append(ToolSuggestion(
+            id="arch-fastapi",
+            name="api_request_tool",
+            description="Generic tool to make authenticated requests to FastAPI endpoints",
+            source_type="pattern",
+            source_file=None,
+            source_line=None,
+            parameters=[
+                ToolSuggestionParameter(name="endpoint", type="string", description="API endpoint path", required=True),
+                ToolSuggestionParameter(name="method", type="string", description="HTTP method", required=True),
+                ToolSuggestionParameter(name="data", type="object", description="Request body", required=False),
+            ],
+            priority="high",
+            reasoning="FastAPI architecture detected - a generic API request tool would enable agent interaction with all endpoints",
+        ))
+
+    if "async" in arch_lower or "web framework" in arch_lower:
+        suggestions.append(ToolSuggestion(
+            id="arch-async",
+            name="async_operation_tool",
+            description="Tool to execute async operations and background tasks",
+            source_type="pattern",
+            source_file=None,
+            source_line=None,
+            parameters=[
+                ToolSuggestionParameter(name="operation", type="string", description="Operation to execute", required=True),
+                ToolSuggestionParameter(name="timeout", type="number", description="Timeout in seconds", required=False),
+            ],
+            priority="medium",
+            reasoning="Async framework detected - agent may need to handle async operations",
+        ))
+
+    # 3. Add suggestions from recommendations
+    for i, rec in enumerate(insights_data.recommendations[:3]):
+        suggestions.append(ToolSuggestion(
+            id=f"rec-{i}",
+            name=f"integration_tool_{i}",
+            description=rec,
+            source_type="recommendation",
+            source_file=None,
+            source_line=None,
+            parameters=[],
+            priority="low",
+            reasoning=f"Based on codebase analysis recommendation",
+        ))
+
+    # 4. Get dependencies and suggest tools for key modules
+    deps_data = await get_connected_repo_dependencies(repo_id)
+
+    # Find API/service modules and suggest tools
+    for node in deps_data.nodes:
+        if node.type == "api" or "api" in node.name.lower() or "route" in node.name.lower():
+            suggestions.append(ToolSuggestion(
+                id=f"dep-{node.id}",
+                name=f"{node.name.lower().replace(' ', '_')}_tool",
+                description=f"Tool to interact with {node.name} module",
+                source_type="dependency",
+                source_file=None,
+                source_line=None,
+                parameters=[
+                    ToolSuggestionParameter(name="action", type="string", description="Action to perform", required=True),
+                ],
+                priority="medium",
+                reasoning=f"Key {node.type} module detected in dependency graph - agent integration point",
+            ))
+
+    # Deduplicate by name and limit results
+    seen_names = set()
+    unique_suggestions = []
+    for s in suggestions:
+        if s.name not in seen_names:
+            seen_names.add(s.name)
+            unique_suggestions.append(s)
+
+    # Sort by priority
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    unique_suggestions.sort(key=lambda x: priority_order.get(x.priority, 3))
+
+    # Limit to top 20 suggestions
+    unique_suggestions = unique_suggestions[:20]
+
+    analysis_summary = f"Analyzed {connection.name}: {len(injection_points_data.points)} endpoints, {len(deps_data.nodes)} modules, {len(insights_data.recommendations)} recommendations"
+
+    return ToolSuggestionsResponse(
+        repo_id=repo_id,
+        repo_name=connection.name,
+        suggestions=unique_suggestions,
+        total_suggestions=len(unique_suggestions),
+        analysis_summary=analysis_summary,
+    )
+
+
+class GenerateToolRequest(BaseModel):
+    """Request to generate a tool from a suggestion."""
+
+    suggestion_id: str = Field(..., description="ID of the tool suggestion to generate")
+    custom_name: str | None = Field(default=None, description="Optional custom name for the tool")
+    custom_description: str | None = Field(default=None, description="Optional custom description")
+
+
+@app.post("/repo/{repo_id}/generate-tool", response_model=GeneratedToolResponse, tags=["Tools"])
+async def generate_tool_from_suggestion(repo_id: str, request: GenerateToolRequest) -> GeneratedToolResponse:
+    """Generate a tool from a suggestion.
+
+    Takes a tool suggestion ID and generates the Python code for that tool.
+    The tool is not registered but returned as code for review.
+
+    Args:
+        repo_id: The repository connection ID
+        request: The generation request with suggestion ID
+
+    Returns:
+        GeneratedToolResponse with the generated tool code
+    """
+    # Get suggestions to find the requested one
+    suggestions_data = await get_tool_suggestions(repo_id)
+
+    suggestion = None
+    for s in suggestions_data.suggestions:
+        if s.id == request.suggestion_id:
+            suggestion = s
+            break
+
+    if not suggestion:
+        raise HTTPException(status_code=404, detail=f"Suggestion {request.suggestion_id} not found")
+
+    # Generate tool code
+    tool_name = request.custom_name or suggestion.name
+    tool_description = request.custom_description or suggestion.description
+
+    # Build parameters schema
+    params_schema = []
+    for p in suggestion.parameters:
+        params_schema.append(f'        "{p.name}": {{"type": "{p.type}", "description": "{p.description}"}}')
+
+    params_code = ",\n".join(params_schema) if params_schema else "        # No parameters"
+
+    # Generate the tool code
+    generated_code = f'''"""Generated tool: {tool_name}
+
+{tool_description}
+
+Source: {suggestion.source_type} detected in {suggestion.source_file or 'repository'}
+Generated: {datetime.utcnow().isoformat()}
+"""
+
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from typing import Any
+
+
+class {tool_name.title().replace("_", "")}Input(BaseModel):
+    """Input schema for {tool_name}."""
+
+    # TODO: Add input fields based on detected parameters
+    pass
+
+
+@tool
+async def {tool_name}(**kwargs: Any) -> dict[str, Any]:
+    """{tool_description}
+
+    Args:
+        **kwargs: Tool parameters
+
+    Returns:
+        Result dictionary with response data
+    """
+    # TODO: Implement tool logic
+    # Source: {suggestion.source_file or 'repository analysis'}
+    # Reasoning: {suggestion.reasoning}
+
+    return {{
+        "status": "not_implemented",
+        "message": "Tool generated from repository analysis - implementation required",
+        "source": "{suggestion.source_type}",
+    }}
+
+
+__all__ = ["{tool_name}"]
+'''
+
+    return GeneratedToolResponse(
+        id=f"gen-{hash(tool_name) % 100000}",
+        name=tool_name,
+        description=tool_description,
+        parameters={p.name: {"type": p.type, "required": p.required} for p in suggestion.parameters},
+        generated_code=generated_code,
+        status="generated",
+        source_suggestion_id=suggestion.id,
     )
 
 
@@ -1695,7 +2168,7 @@ async def list_traces(limit: int = Query(default=20, ge=1, le=100)) -> list[Trac
             duration_ms=run["duration_ms"],
             tokens_used=run["tokens_used"],
             status=run["status"],
-            tool_calls=run.get("metadata", {}).get("tool_names", []),
+            tool_calls=run.get("tool_calls", []),
         )
         for run in runs
     ]
@@ -1796,7 +2269,7 @@ async def run_evals_endpoint() -> dict[str, str]:
         return {"run_id": run_id, "status": "started"}
     except Exception as e:
         logger.error(f"Failed to run evals: {e}")
-        return {"run_id": "", "status": "error", "error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Failed to run evaluations: {str(e)}")
 
 
 @app.get("/evals/results", response_model=EvalResultsResponse, tags=["Evals"])

@@ -4,16 +4,14 @@ interface NavItem {
   label: string;
   path: string;
   icon: string;
+  description: string;
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', path: '/', icon: 'dashboard' },
-  { label: 'Strategy', path: '/strategy', icon: 'hub' },
-  { label: 'Tools', path: '/tools', icon: 'handyman' },
-  { label: 'Verification', path: '/verification', icon: 'verified_user' },
-  { label: 'Observability', path: '/observability', icon: 'monitoring' },
-  { label: 'Evaluations', path: '/evaluations', icon: 'assessment' },
-  { label: 'Finances', path: '/finances', icon: 'payments' },
+  { label: 'Repo Analysis', path: '/', icon: 'dashboard', description: 'Connect and analyze repositories' },
+  { label: 'Agent Chat', path: '/chat', icon: 'chat', description: 'Interact with the AI agent' },
+  { label: 'Verification', path: '/verification', icon: 'verified_user', description: 'Configure checks and run evaluations' },
+  { label: 'Observability', path: '/observability', icon: 'monitoring', description: 'View traces and cost metrics' },
 ];
 
 export function Navigation() {
@@ -26,7 +24,7 @@ export function Navigation() {
             <span className="material-symbols-outlined">smart_toy</span>
           </div>
           <h2 className="text-lg font-bold leading-tight tracking-[-0.015em]">
-            Ghostfolio AI Integrator
+            Ghostfolio Agent
           </h2>
         </div>
 
@@ -43,6 +41,7 @@ export function Navigation() {
                     : 'text-text-dim hover:text-white hover:bg-surface-dark'
                 }`
               }
+              title={item.description}
             >
               {item.label}
             </NavLink>

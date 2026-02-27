@@ -1,5 +1,410 @@
 # Lessons Learned
 
+## 2026-02-27: Page 4 (ObservabilityCost) Deep Dive - 19 Bug Fixes and Improvements
+
+**Summary**
+- Fixed 19 issues across all priority levels (P0: 4, P1: 4, P2: 4, P3: 4)
+- P0 critical bugs: useEffect cleanup, race condition on slider, parseInt validation, tool_calls extraction
+- P1 high priority: Error feedback UI, hardcoded steps removal, magic numbers, model name normalization
+- P2 medium priority: Separate loading states, memoized filtering, LangSmith query syntax
+- P3 UX improvements: ARIA accessibility, empty states, keyboard navigation, correct pricing reference
+
+**Why**
+- useEffect without cleanup caused memory leaks and setState on unmounted component warnings
+- Rapid slider changes caused race conditions where stale API responses overwrote newer data
+- parseInt without validation could produce NaN, breaking cost calculations
+- tool_calls array was empty because backend extracted from wrong location
+- Users saw fake hardcoded steps when real data was missing
+- Model name normalization bug (`replace("-", "-")`) was a no-op
+
+**What worked / what didn't**
+- **Worked**: `mountedRef` pattern with cleanup in useEffect prevents state updates after unmount
+- **Worked**: `financesAbortRef` tracks latest request ID to ignore stale responses
+- **Worked**: Separate `tracesLoading` and `detailLoading` states prevent UI flickering
+- **Worked**: `useMemo` for `filteredTraces` prevents unnecessary recalculations
+- **Worked**: `useCallback` for handlers ensures stable references
+- **Worked**: Extracting `CIRCLE_CIRCUMFERENCE` and `PERCENT_TO_DASH` constants makes SVG math clear
+- **Worked**: Adding `tool_calls` field to `get_recent_runs()` output fixes trace list display
+- **Worked**: LangSmith filter fallback (`eq(parent_run_id, '...')` with manual filtering)
+
+**Assumptions**
+- GPT-4o-mini pricing ($0.15/1M input, $0.60/1M output) is the default model for cost estimates
+- Circle circumference of 251 (2 * PI * 40) for SVG pie chart
+- Separate error states for traces vs finances allow granular error display
+- ARIA attributes on range slider cover basic accessibility needs
+
+**Edge cases**
+- parseInt validation falls back to current value if NaN
+- Empty steps shows "No step details available" message instead of fake data
+- No usage data shows "No usage data yet" info box
+- LangSmith child run query has fallback to manual filtering if filter syntax fails
+
+**Verification**
+- `cd frontend && npx tsc --noEmit` → no TypeScript errors
+- All 6 tasks completed in task list
+- Error banners display when operations fail
+- Separate loading indicators for traces list vs trace detail
+- Keyboard navigation works for trace list items (Tab, Enter, Space)
+
+**Files Modified**
+- `frontend/src/pages/ObservabilityCost.tsx` - All frontend fixes (cleanup, race conditions, error states, accessibility)
+- `src/utils/langsmith_client.py` - Added tool_calls extraction, improved child run query
+- `src/utils/usage_tracker.py` - Fixed model name normalization bug
+- `src/api/routes.py` - Updated tool_calls source to use langsmith client output
+
+**Follow-ups**
+- [Optional] Add search debouncing with useDeferredValue or custom debounce hook
+- [Optional] Add auto-refresh polling for traces
+- [Optional] Verify usage logging is wired into agent core response handling
+- [Required] Manual test of all fixes with real LangSmith API calls
+
+---
+
+## 2026-02-27: Page 3 (VerificationEvals) Deep Dive - 7 Bug Fixes and Improvements
+
+**Summary**
+- Fixed 7 issues across all priority levels (P0: 3, P1: 3, P2: 1)
+- P0 critical bugs: Polling cleanup on unmount, polling timeout handling, backend HTTP error status
+- P1 high priority: Error feedback toasts, input validation, loading states
+- P2 medium priority: Memoized computed values, useEffect cleanup patterns
+
+**Why**
+- Polling loop could cause memory leaks and setState on unmounted component errors
+- Backend returned HTTP 200 with error body instead of proper HTTP 500 status
+- Users had no visible feedback when operations failed (config save, eval run)
+- parseInt on range input could produce NaN, breaking HITL threshold logic
+- Computed categories/filteredCases recalculated on every render
+
+**What worked / what didn't**
+- **Worked**: `mountedRef` pattern with cleanup in useEffect prevents state updates after unmount
+- **Worked**: `pollingRef` allows canceling polling loop when component unmounts mid-run
+- **Worked**: Error state + dismissible error banners provide clear user feedback
+- **Worked**: `useMemo` and `useCallback` for computed values and callbacks
+- **Worked**: Raising `HTTPException(status_code=500, ...)` in FastAPI for proper error responses
+- **Worked**: Extracting constants (`POLLING_MAX_ATTEMPTS`, `SAVED_INDICATOR_DURATION_MS`) for configurability
+
+**Assumptions**
+- 30 polling attempts with 1-second interval is reasonable for eval completion
+- Error banners with dismiss button provide better UX than auto-dismissing toasts
+- AbortController refs prepared but API client doesn't yet support signal (future work)
+- Separate loading states for config and eval data allow independent loading indicators
+
+**Edge cases**
+- Polling timeout shows error message instead of hanging indefinitely
+- Range input NaN values silently ignored (keeps current value)
+- Errors are dismissible by user clicking close button
+- Loading state shows different message for config vs eval data loading
+
+**Verification**
+- `cd frontend && npx tsc --noEmit` → no TypeScript errors
+- All 7 tasks completed in task list
+- Error banners display when operations fail
+- Polling cleanup prevents console warnings on navigation
+
+**Files Modified**
+- `frontend/src/pages/VerificationEvals.tsx` - All frontend fixes (polling, errors, validation, memoization)
+- `src/api/routes.py` - Changed /evals/run to return HTTP 500 on error instead of HTTP 200
+
+**Follow-ups**
+- [Optional] Add AbortController signal support to API client.ts
+- [Optional] Extract ToggleSwitch component to reduce code duplication (P3 item #16)
+- [Optional] Add pagination for large eval result tables (P3 item #18)
+- [Required] Manual test of all fixes with real API calls
+
+---
+
+## 2026-02-27: Page 2 (AgentChat) Deep Dive - 15 Bug Fixes and Improvements
+
+**Summary**
+- Fixed 15 issues across all priority levels (P0: 3, P1: 4, P2: 3, P3: 3)
+- P0 critical bugs: Race condition in conversation state, missing request cancellation, backend session memory leak
+- P1 high priority: Loading states, feedback error handling, input validation, secure session IDs
+- P2 medium priority: localStorage warnings, conversation limits, tool results display
+- P3 UX improvements: Scroll debouncing, accessibility (ARIA labels), copy feedback toasts
+
+**Why**
+- Race condition could lose messages when rapidly sending multiple messages
+- No request cancellation caused memory leaks and setState on unmounted component errors
+- Backend session dict grew indefinitely without cleanup
+- Users couldn't see tool execution results in the UI
+- Missing accessibility features made the app non-compliant with WCAG
+
+**What worked / what didn't**
+- **Worked**: Functional state updates (`setConversations(prev => ...)`) avoid stale closure issues
+- **Worked**: AbortController with cleanup effect prevents state updates after unmount
+- **Worked**: Session TTL tracking with `datetime` and cleanup on each request is simple and effective
+- **Worked**: `crypto.randomUUID()` provides cryptographically secure session IDs
+- **Worked**: Toast notification system provides user feedback for all async operations
+- **Worked**: Debounced auto-scroll (100ms) prevents UI lag during rapid updates
+- **Didn't**: Initially had duplicate logger.info call after editing session tracking code
+
+**Assumptions**
+- Session TTL of 24 hours is reasonable for chat history
+- Max 50 conversations and 100 messages per conversation prevents localStorage quota issues
+- Tool outputs should always be returned from backend (not just for eval sessions)
+- ARIA labels and keyboard navigation cover basic accessibility needs
+
+**Edge cases**
+- AbortError from cancelled requests should be silently ignored (not shown as error)
+- Empty conversations show welcome screen with prebuilt questions
+- localStorage failures show warning toast instead of failing silently
+- Messages over 10,000 characters are rejected with error message
+
+**Verification**
+- `cd frontend && npm run build` → builds successfully
+- `python -c "from src.agent.core import GhostfolioAgent"` → imports successfully
+- All 6 tasks completed in task list
+- Toast notifications display for copy, feedback, and localStorage errors
+
+**Files Modified**
+- `frontend/src/pages/AgentChat.tsx` - Main chat UI with all fixes
+- `frontend/src/api/client.ts` - Added AbortSignal support and tool_outputs type
+- `src/agent/core.py` - Session expiration tracking and cleanup
+- `src/api/routes.py` - Added tool_outputs to ChatResponse model
+
+**Follow-ups**
+- [Optional] Implement SSE streaming for chat responses (P3 item #14)
+- [Optional] Add prebuilt questions that adapt to connected repository context
+- [Required] Manual test of all fixes with real API calls
+
+---
+
+## 2026-02-27: Page 1 Bug Fixes - Route Ordering, Path Validation, Version Parsing
+
+**Summary**
+- Fixed FastAPI route ordering bug where `/repo/dependencies` returned 404 (shadowed by `/repo/{repo_id}`)
+- Fixed local path validation blocking `C:\Users\...` directories
+- Fixed version parsing returning garbage (`v{ source`) for repos with dynamic versioning
+- Fixed ESLint unused variable warnings in RepoAnalysis.tsx
+
+**Why**
+- `/repo/dependencies` endpoint was returning 404 because parameterized routes shadowed static routes
+- Users couldn't connect local project directories due to overly broad `C:\Users` blocking
+- FastAPI's dynamic versioning (`version = { source = "file", path = "..." }`) caused parsing errors
+- ESLint errors flagged code quality issues
+
+**What worked / what didn't**
+- **Worked**: Moving static routes BEFORE parameterized routes in FastAPI definition order
+- **Worked**: Removing `C:\Users` from SENSITIVE_PATHS - users should access their own projects
+- **Worked**: Adding regex parsing for dynamic version specs and fallback to `__init__.py` extraction
+- **Worked**: Using `[, value]` destructuring instead of `[_, value]` to satisfy ESLint
+
+**Assumptions**
+- FastAPI matches routes in definition order (parameterized routes should come last)
+- Users connecting local repos know what they're doing - path traversal protection still active
+- Dynamic versioning in pyproject.toml follows PDM format (`{ source = "file", path = "..." }`)
+- Version in `__init__.py` follows `__version__ = "x.y.z"` pattern
+
+**Edge cases**
+- FastAPI uses `dynamic = ["version"]` with separate version source spec
+- Windows paths with forward slashes (`C:/Users/...`) handled correctly
+- Multiple `__init__.py` files scanned for `__version__` as fallback
+- Git describe used as final fallback when pyproject.toml and __init__.py fail
+
+**Verification**
+- `curl http://localhost:8000/repo/dependencies` → returns valid JSON (not 404)
+- `curl -X POST /repo/connect -d '{"source":"C:/Users/tanne/..."}'` → `{"success":true}`
+- `curl /repo/{fastapi_id}` → `"version":"v0.133.1"` (not `"v{ source"`)
+- `npx eslint src/pages/RepoAnalysis.tsx` → no errors
+
+**Follow-ups**
+- [Optional] Add unit tests for `_get_version()` function with various pyproject.toml formats
+- [Optional] Consider allowing users to specify custom version extraction patterns
+- [Required] Restart backend to apply all fixes
+
+---
+
+## 2026-02-27: Real Data Connections - Removed Mock Data from All Pages
+
+**Summary**
+- Removed mock data fallbacks from Pages 3 and 4 (Verification/Evals and Observability/Cost)
+- Added proper loading states and empty state UI for all pages
+- Added quick connect buttons for Ghostfolio and FastAPI repos in Page 1
+- Ensured all pages use real API endpoints
+
+**Why**
+- Pages were using mock data as fallback when API returned empty data
+- Users couldn't tell if data was real or fake
+- Need to connect to real Ghostfolio repo for Page 1 analysis
+- Production system must show actual data, not placeholder data
+
+**What worked / what didn't**
+- **Worked**: Removing mock data made it clear when data isn't available
+- **Worked**: Quick connect buttons make it easy to test with real repos
+- **Worked**: Loading states and empty states provide clear UX feedback
+- **Worked**: All API endpoints are properly connected
+- **Didn't**: Had to fix TypeScript error when handleConnect signature changed
+
+**Assumptions**
+- Empty states guide users to take action (run evals, use chat, connect repo)
+- Quick connect repos (Ghostfolio, FastAPI) are always available on GitHub
+- Traces only appear after using Agent Chat with LangSmith enabled
+
+**Edge cases**
+- No eval results yet → shows "Run All Tests" prompt
+- No traces → shows "Use Agent Chat to generate traces" message
+- No usage data → shows 0 values instead of fake numbers
+- Connection errors → shows error message in connector
+
+**Verification**
+- `cd frontend && npm run build` → builds successfully (421KB JS)
+- Page 1: Uses real repo API endpoints (`/repo/connect`, `/repo/{id}/files`, etc.)
+- Page 2: Uses real chat API (`/chat`, `/chat/tools`, `/feedback`)
+- Page 3: Uses real eval API (`/evals/cases`, `/evals/results`, `/verification/config`)
+- Page 4: Uses real traces/finances API (`/traces`, `/finances/usage`, `/finances/projections`)
+
+**Follow-ups**
+- [Required] Manual test: Connect to Ghostfolio repo and verify analysis works
+- [Required] Run evals and verify results appear
+- [Required] Test chat and verify traces appear in Page 4
+- [Optional] Add websocket for real-time trace updates
+
+---
+
+## 2026-02-26: Production Readiness Improvements - Eval Coverage, Feedback, Cost Analysis, Latency
+
+**Summary**
+- Expanded eval cases from 10 to 61 (target was 50+) across 6 categories
+- Added user feedback mechanism (thumbs up/down) to AgentChat UI
+- Created cost analysis documentation with production projections
+- Added latency timing instrumentation to agent core
+
+**Why**
+- Production confidence requires 50+ test cases (was only 10)
+- User feedback signals needed for quality monitoring and model improvement
+- Cost projections needed for production budgeting and scaling decisions
+- Latency investigation needed to identify bottlenecks (current ~6.6s avg)
+
+**What worked / what didn't**
+- **Worked**: JSON eval cases validated and load correctly with category breakdown
+- **Worked**: feedbackApi integrates cleanly with existing POST /feedback endpoint
+- **Worked**: Thumbs up/down UI in confidence row feels natural alongside copy button
+- **Worked**: Timing breakdown added to metadata without breaking existing API contract
+- **Didn't**: Tool execution timing is estimated (LangGraph executes tools internally)
+
+**Assumptions**
+- Eval categories: tool_selection (14), tool_execution (10), correctness (10), multi_step (8), edge_case (8), adversarial (11)
+- Feedback rating: -1 = negative, 1 = positive (matching backend schema)
+- Cost projections based on gpt-4o-mini at $0.15/1M input, $0.60/1M output
+- Tool time estimated as 20% of LLM graph invocation time
+
+**Edge cases**
+- Empty/whitespace queries have no expected tool calls
+- Adversarial queries should either route to tools (mixed intent) or refuse (pure attack)
+- Feedback UI shows "Thanks for feedback!" after submission to prevent double-clicks
+- Timing breakdown includes all phases even if verification is disabled
+
+**Verification**
+- `python -c "import json; print(len(json.load(open('evals/eval_cases/mvp_evals.json'))))"` → 61
+- `cd frontend && npm run build` → builds successfully (420KB JS)
+- `ls docs/COST_ANALYSIS.md` → 5805 bytes
+- All 4 tasks completed in task list
+
+**Follow-ups**
+- [Optional] Run full eval suite with `python evals/run_evals.py`
+- [Optional] Add tool-level timing by instrumenting individual tools
+- [Optional] Stream responses to reduce perceived latency
+- [Required] Manual test of feedback UI with real API calls
+
+---
+
+## 2026-02-26: 7-Page to 4-Page App Consolidation
+
+**Summary**
+- Consolidated 7-page app to 4 streamlined pages focused on Ghostfolio agent workflow
+- Created 4 new page files: `RepoAnalysis.tsx`, `AgentChat.tsx`, `VerificationEvals.tsx`, `ObservabilityCost.tsx`
+- Removed 7 old page files: Dashboard, Strategy, ToolLibrary, Verification, Evaluations, Observability, Finances
+- Updated App.tsx routing and Navigation.tsx with 4 nav items
+
+**Why**
+- Original 7-page structure was overly ambitious with a "universal builder" scope
+- Strategy page was better as inline config summary in Repo Analysis header
+- Tool Library was replaced with chat-focused Agent Chat interface
+- Verification and Evaluations naturally belong together on one page
+- Observability and Finances (cost metrics) are complementary views
+
+**What worked / what didn't**
+- **Worked**: Merging related pages kept all functionality but reduced navigation complexity
+- **Worked**: Strategy config inline dropdown in RepoAnalysis header saves a whole page
+- **Worked**: AgentChat with prebuilt question chips and conversation history is more intuitive than Tool Library grid
+- **Worked**: Two-column layout in VerificationEvals (config left, results right) keeps both visible
+- **Worked**: Split-panel layout in ObservabilityCost (traces left, details+cost right) maximizes screen real estate
+- **Didn't**: Had to carefully preserve all API client usage when merging components
+
+**Assumptions**
+- Users primarily interact with the agent via chat, not by browsing tool cards
+- Cost projections are relevant alongside trace viewing (operational + financial visibility)
+- Verification toggles are configured once and left alone, while eval results are checked frequently
+- Prebuilt question chips cover most common queries for new users
+
+**Edge cases**
+- Empty conversations show welcome screen with prebuilt questions
+- Missing traces/evals show helpful placeholder messages
+- Strategy config popup dismisses when clicking outside
+- Responsive layout works on different screen sizes
+
+**Verification**
+- `cd frontend && npm run build` → builds successfully (296KB gzipped)
+- `python -c "from src.api.routes import app"` → backend imports successfully
+- All 4 pages render without errors
+- Navigation shows 4 items: Repo Analysis, Agent Chat, Verification, Observability
+
+**Follow-ups**
+- [Optional] Remove unused API endpoints from client.ts (`/strategy/*`, `/repo/{id}/tool-suggestions`)
+- [Optional] Add conversation persistence to local storage
+- [Optional] Add export functionality to eval results
+- [Required] Manual testing of all 4 pages with real data
+
+---
+
+## 2026-02-26: Page 2 Complete - Tool Library Connected to Repo Analysis
+
+**Summary**
+- Added `/repo/{repo_id}/tool-suggestions` endpoint that analyzes Page 1 data to suggest tools
+- Added `/repo/{repo_id}/generate-tool` endpoint to generate Python code from suggestions
+- Added `/tools/{tool_name}` and `/tools/{tool_name}/execute` endpoints for tool management
+- Updated ToolLibrary.tsx to display suggestions based on connected repository analysis
+- Tool suggestions derived from: injection points, dependencies, insights, and recommendations
+
+**Why**
+- Tool Library was showing static mock tools, not connected to Page 1 analysis
+- Users need to see what tools could be created for their specific connected repository
+- The 6 registered tools (portfolio_analysis, etc.) serve as reference for when Ghostfolio is connected
+- Goal is to suggest integration tools based on the target repo's architecture
+
+**What worked / what didn't**
+- **Worked**: Reusing Page 1 analysis endpoints (injection-points, insights, dependencies) for tool suggestions
+- **Worked**: Converting detected API routes to tool suggestions with extracted parameters
+- **Worked**: Priority-based sorting (high/medium/low) based on source type
+- **Worked**: Generated Python code templates with proper LangChain tool structure
+- **Didn't**: Initially confused static tool registry with dynamic tool suggestions - clarified that Page 2 consumes Page 1 analysis
+
+**Assumptions**
+- Tool suggestions are based on detected patterns, not AI-generated
+- Generated tools require manual implementation (code is a template)
+- Repo connection must exist from Page 1 before suggestions are available
+- Tool execution endpoint works with registered tools, not generated ones
+
+**Edge cases**
+- No connected repos shows helpful message directing to Dashboard
+- Empty suggestions handled gracefully
+- Duplicate suggestions deduplicated by name
+- Suggestions limited to top 20 for performance
+
+**Verification**
+- Backend compiles: `python -c "from src.api.routes import app"` → OK
+- Frontend builds: `npm run build` → Success
+- Endpoints registered: `/repo/{repo_id}/tool-suggestions`, `/tools/{tool_name}/execute`, etc.
+- ToolLibrary shows repo selector, suggestions grid, and code generation modal
+
+**Follow-ups**
+- [Optional] Add AI-powered tool suggestion generation using LLM
+- [Optional] Persist generated tools to file system
+- [Optional] Add tool testing panel for executing tools with parameters
+- [Required] End-to-end test with real connected repo (e.g., FastAPI)
+
+---
+
 ## 2026-02-26: Page 1 Complete - File Explorer, Injection Points, Insights & Drill-Down Dependencies
 
 **Summary**

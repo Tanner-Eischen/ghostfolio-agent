@@ -12,6 +12,20 @@ interface RepoConnectorProps {
   connectedRepo: RepoConnection | null;
 }
 
+// Predefined repos for quick connect
+const QUICK_REPOS = [
+  {
+    name: 'Ghostfolio',
+    source: 'https://github.com/ghostfolio/ghostfolio.git',
+    description: 'Open source wealth management platform',
+  },
+  {
+    name: 'FastAPI',
+    source: 'https://github.com/tiangolo/fastapi.git',
+    description: 'Modern async Python web framework',
+  },
+];
+
 export function RepoConnector({ onConnected, onDisconnect, connectedRepo }: RepoConnectorProps) {
   const [source, setSource] = useState('');
   const [branch, setBranch] = useState('');
@@ -19,8 +33,9 @@ export function RepoConnector({ onConnected, onDisconnect, connectedRepo }: Repo
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleConnect = async () => {
-    if (!source.trim()) {
+  const handleConnect = async (overrideSource?: string, overrideName?: string) => {
+    const sourceToUse = overrideSource || source.trim();
+    if (!sourceToUse) {
       setError('Please enter a git URL or local path');
       return;
     }
@@ -30,9 +45,9 @@ export function RepoConnector({ onConnected, onDisconnect, connectedRepo }: Repo
 
     try {
       const request: RepoConnectionRequest = {
-        source: source.trim(),
+        source: sourceToUse,
         branch: branch.trim() || undefined,
-        name: name.trim() || undefined,
+        name: overrideName || name.trim() || undefined,
       };
 
       const response: RepoConnectionResponse = await repoApi.connect(request);
@@ -166,7 +181,7 @@ export function RepoConnector({ onConnected, onDisconnect, connectedRepo }: Repo
         )}
 
         <button
-          onClick={handleConnect}
+          onClick={() => handleConnect()}
           disabled={loading || !source.trim()}
           className="w-full bg-primary hover:bg-cyan-400 disabled:bg-slate-600 disabled:cursor-not-allowed text-surface-darker font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
         >
@@ -185,7 +200,21 @@ export function RepoConnector({ onConnected, onDisconnect, connectedRepo }: Repo
       </div>
 
       <div className="mt-4 pt-4 border-t border-surface-border">
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-400 mb-2">Quick Connect:</p>
+        <div className="flex flex-wrap gap-2">
+          {QUICK_REPOS.map((repo) => (
+            <button
+              key={repo.name}
+              onClick={() => handleConnect(repo.source, repo.name)}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-darker border border-surface-border rounded-lg text-xs text-slate-300 hover:text-white hover:border-primary/50 transition-colors disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-sm text-primary">bolt</span>
+              {repo.name}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500 mt-3">
           <span className="text-slate-400">Supported:</span> HTTPS git URLs, local filesystem paths
         </p>
         <p className="text-xs text-slate-500 mt-1">

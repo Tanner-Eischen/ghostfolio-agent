@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { healthApi, repoApi } from '../api/client';
+import { healthApi, repoApi, strategyApi } from '../api/client';
 import type {
   HealthResponse,
   RepoInfo,
@@ -8,6 +8,7 @@ import type {
   FileNode,
   InjectionPoint,
   CodebaseInsight,
+  StrategyConfig,
 } from '../api/client';
 import { Sidebar } from '../components/layout/Sidebar';
 import { RepoConnector } from '../components/RepoConnector';
@@ -97,13 +98,66 @@ function FileTreeItem({ node, depth = 0, selectedPath, onSelect }: {
   );
 }
 
-export function Dashboard() {
+// Strategy config summary component
+function StrategySummary({ config }: { config: StrategyConfig | null }) {
+  const [showDetails, setShowDetails] = useState(false);
+
+  if (!config) return null;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setShowDetails(!showDetails)}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-dark border border-surface-border hover:border-primary/50 transition-colors"
+      >
+        <span className="material-symbols-outlined text-primary text-sm">hub</span>
+        <span className="text-sm font-medium text-slate-300">{config.framework}</span>
+        <span className="text-xs text-text-dim">|</span>
+        <span className="text-sm text-text-dim">{config.model.split(' ')[0]}</span>
+        <span className="material-symbols-outlined text-text-dim text-sm">
+          {showDetails ? 'expand_less' : 'expand_more'}
+        </span>
+      </button>
+
+      {showDetails && (
+        <div className="absolute top-full right-0 mt-2 w-72 bg-surface-dark border border-surface-border rounded-xl shadow-xl z-50 p-4">
+          <h4 className="text-sm font-bold text-white mb-3">Agent Configuration</h4>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-text-dim">Framework</span>
+              <span className="text-white">{config.framework}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-text-dim">Model</span>
+              <span className="text-white">{config.model}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-text-dim">JSON Mode</span>
+              <span className={config.json_mode ? 'text-emerald-400' : 'text-text-dim'}>
+                {config.json_mode ? 'On' : 'Off'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-text-dim">Streaming</span>
+              <span className={config.stream_responses ? 'text-emerald-400' : 'text-text-dim'}>
+                {config.stream_responses ? 'On' : 'Off'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function RepoAnalysis() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [repo, setRepo] = useState<RepoInfo | null>(null);
   const [dependencies, setDependencies] = useState<DependenciesGraph | null>(null);
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [injectionPoints, setInjectionPoints] = useState<InjectionPoint[]>([]);
   const [insights, setInsights] = useState<CodebaseInsight | null>(null);
+  const [strategyConfig, setStrategyConfig] = useState<StrategyConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapMode, setMapMode] = useState<MapMode>('full');
   const [zoom, setZoom] = useState(1);
@@ -121,6 +175,17 @@ export function Dashboard() {
     try {
       const healthData = await healthApi.check();
       setHealth(healthData);
+
+      // Load strategy config
+      const stratConfig = await strategyApi.get().catch(() => ({
+        framework: 'LangGraph',
+        model: 'GPT-4o (OpenAI)',
+        temperature: 0.0,
+        json_mode: true,
+        stream_responses: false,
+        contribution_path: 'langchain',
+      }));
+      setStrategyConfig(stratConfig as StrategyConfig);
 
       if (connectedRepo) {
         // Fetch all data from connected repo
@@ -254,13 +319,13 @@ export function Dashboard() {
 
       <main className="flex-1 flex flex-col bg-background-dark overflow-y-auto">
         {/* Top Alert Bar - Missing Dependencies */}
-        {health?.dependencies && Object.entries(health.dependencies).some(([_, value]) => !value) && (
+        {health?.dependencies && Object.entries(health.dependencies).some(([, value]) => !value) && (
           <div className="bg-amber-500/10 border-b border-amber-500/30 px-6 py-2 flex items-center gap-3">
             <span className="material-symbols-outlined text-amber-400 text-lg">warning</span>
             <span className="text-amber-200 text-sm">
               Missing Critical API Keys:{' '}
               {Object.entries(health.dependencies)
-                .filter(([_, value]) => !value)
+                .filter(([, value]) => !value)
                 .map(([key]) => key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))
                 .join(', ')}
             </span>
@@ -283,7 +348,8 @@ export function Dashboard() {
             </div>
             <h1 className="text-2xl font-bold text-white">Codebase Analysis & Mapping</h1>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-3 items-center">
+            <StrategySummary config={strategyConfig} />
             {repo && (
               <>
                 <span className="px-3 py-1 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 text-xs font-medium flex items-center gap-1">

@@ -64,6 +64,17 @@ def get_recent_runs(
             elif run.prompt_tokens and run.completion_tokens:
                 tokens_used = run.prompt_tokens + run.completion_tokens
 
+            # Extract tool names from metadata (may be stored by agent during run)
+            extra = run.extra or {}
+            tool_names = extra.get("tool_names", [])
+
+            # Also check child_runs if available in the run object (without extra API call)
+            if not tool_names and hasattr(run, "child_runs") and run.child_runs:
+                tool_names = [
+                    child.name for child in run.child_runs
+                    if hasattr(child, "run_type") and child.run_type == "tool"
+                ]
+
             result.append({
                 "id": str(run.id),
                 "name": run.name or "unnamed",
@@ -73,7 +84,8 @@ def get_recent_runs(
                 "tokens_used": tokens_used,
                 "status": "success" if run.status == "completed" else run.status or "unknown",
                 "tags": run.tags or [],
-                "metadata": run.extra or {},
+                "metadata": extra,
+                "tool_calls": tool_names,
             })
 
         return result
@@ -97,6 +109,8 @@ def get_run_details(run_id: str) -> dict[str, Any] | None:
         logger.warning("LangSmith client not configured")
         return None
 
+    settings = get_settings()
+
     try:
         # Read the run
         run = client.read_run(run_id)
@@ -116,13 +130,28 @@ def get_run_details(run_id: str) -> dict[str, Any] | None:
         # Get child runs (steps/spans)
         steps = []
         try:
-            child_runs = list(client.list_runs(
-                reference_example_id=None,  # Not filtering by example
-                query=f"parent_run_id = '{run_id}'",
-                limit=100,
-            ))
+            # Try using filter parameter with proper expression syntax
+            # LangSmith SDK uses filter expressions like "eq(parent_run_id, run_id)"
+            # or dictionary filters like {"parent_run_id": run_id}
+            child_runs = None
 
-            for child in child_runs:
+            # Try filter parameter first (more reliable than query)
+            try:
+                child_runs = list(client.list_runs(
+                    project_name=settings.langsmith_project,
+                    filter=f"eq(parent_run_id, '{run_id}')",
+                    limit=100,
+                ))
+            except Exception:
+                # Fallback: try without filter and manually filter
+                logger.debug("Filter syntax failed, trying manual filtering")
+                all_runs = list(client.list_runs(
+                    project_name=settings.langsmith_project,
+                    limit=500,
+                ))
+                child_runs = [r for r in all_runs if str(getattr(r, 'parent_run_id', '')) == run_id]
+
+            for child in child_runs or []:
                 child_duration = 0
                 if child.start_time and child.end_time:
                     child_duration = int((child.end_time - child.start_time).total_seconds() * 1000)

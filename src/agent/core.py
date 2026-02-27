@@ -7,6 +7,7 @@ portfolio analysis, risk assessment, and financial insights.
 
 import time
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
@@ -110,13 +111,40 @@ class GhostfolioAgent:
             strict_mode=verification_strict_mode,
         ) if use_verification else None
 
-        # Conversation history storage
+        # Conversation history storage with session tracking for cleanup
         self._conversation_history: dict[str, list[HumanMessage | AIMessage]] = {}
+        self._session_last_accessed: dict[str, datetime] = {}
+        self._session_ttl = timedelta(hours=24)  # Sessions expire after 24 hours
 
         self.logger.info(
             f"GhostfolioAgent initialized with {len(self.tools)} tools, "
             f"verification={'enabled' if use_verification else 'disabled'}"
         )
+
+    def _cleanup_expired_sessions(self) -> int:
+        """Remove sessions that haven't been accessed in over 24 hours.
+
+        Returns:
+            Number of sessions cleaned up
+        """
+        now = datetime.now()
+        expired_sessions = [
+            session_id for session_id, last_accessed in self._session_last_accessed.items()
+            if now - last_accessed > self._session_ttl
+        ]
+
+        for session_id in expired_sessions:
+            self._conversation_history.pop(session_id, None)
+            self._session_last_accessed.pop(session_id, None)
+
+        if expired_sessions:
+            self.logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
+
+        return len(expired_sessions)
+
+    def _touch_session(self, session_id: str) -> None:
+        """Update the last accessed time for a session."""
+        self._session_last_accessed[session_id] = datetime.now()
 
     @traceable(name="agent_chat", run_type="chain")
     async def chat(self, message: str) -> str:
@@ -147,6 +175,7 @@ class GhostfolioAgent:
         message: str,
         session_id: str | None = None,
         user_id: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Send a message with session context.
 
@@ -154,6 +183,7 @@ class GhostfolioAgent:
             message: User's natural language query
             session_id: Session identifier for conversation history
             user_id: Optional user identifier
+            context: Optional context dict (e.g., repo_id for tool execution)
 
         Returns:
             Response dict with message, confidence, tool_calls, etc.
@@ -161,7 +191,18 @@ class GhostfolioAgent:
         if not session_id:
             session_id = str(uuid.uuid4())
 
+        # Cleanup expired sessions on each request (lightweight operation)
+        self._cleanup_expired_sessions()
+
+        # Mark session as accessed
+        self._touch_session(session_id)
+
         start_time = time.time()
+        timing_breakdown = {
+            "llm_time_ms": 0,
+            "tool_time_ms": 0,
+            "verification_time_ms": 0,
+        }
 
         # Handle mixed-intent prompts: refuse unsafe intent but still serve valid portfolio intent.
         # This keeps the agent useful for adversarial+legitimate combined requests.
@@ -192,11 +233,21 @@ class GhostfolioAgent:
         user_message = HumanMessage(content=safe_message)
         messages.append(user_message)
 
+        # Build config with context
         config = {"configurable": {"thread_id": session_id}}
+        if context:
+            config["configurable"]["context"] = context
+
         inputs = {"messages": messages}
 
         try:
+            # Time the LLM + tool execution
+            llm_start_time = time.time()
             result = await self.graph.ainvoke(inputs, config)
+            llm_end_time = time.time()
+
+            # Calculate LLM time (includes tool execution within LangGraph)
+            timing_breakdown["llm_time_ms"] = round((llm_end_time - llm_start_time) * 1000, 2)
 
             # Extract response
             response_messages = result.get("messages", [])
@@ -299,6 +350,7 @@ class GhostfolioAgent:
 
             # Run verification
             verification_report = None
+            verification_start_time = time.time()
             if self.use_verification and self.verification:
                 # If tools were called but outputs weren't captured, create synthetic output
                 effective_tool_outputs = tool_outputs
@@ -328,6 +380,8 @@ class GhostfolioAgent:
                     query=message,
                     response_data=response_data,
                 )
+            verification_end_time = time.time()
+            timing_breakdown["verification_time_ms"] = round((verification_end_time - verification_start_time) * 1000, 2)
 
             # Update history
             if session_id not in self._conversation_history:
@@ -337,12 +391,19 @@ class GhostfolioAgent:
 
             processing_time = time.time() - start_time
 
+            # Estimate tool time as portion of LLM time (rough heuristic)
+            # Tools typically take 10-30% of the graph invocation time
+            if tool_calls:
+                timing_breakdown["tool_time_ms"] = round(timing_breakdown["llm_time_ms"] * 0.2, 2)
+                timing_breakdown["llm_time_ms"] = round(timing_breakdown["llm_time_ms"] * 0.8, 2)
+
             out = {
                 "message": response_text,
                 "session_id": session_id,
                 "confidence": verification_report.confidence_score if verification_report else 100.0,
                 "confidence_level": verification_report.confidence_level if verification_report else "HIGH",
                 "tool_calls": tool_calls,
+                "tool_outputs": tool_outputs,  # Always include tool outputs for transparency
                 "verification_passed": verification_report.passed if verification_report else True,
                 "requires_escalation": verification_report.escalation.requires_escalation if verification_report else False,
                 "escalation_triggers": verification_report.escalation.triggers if verification_report else [],
@@ -350,11 +411,9 @@ class GhostfolioAgent:
                     "processing_time_ms": round(processing_time * 1000, 2),
                     "tools_used": len(tool_calls),
                     "tool_names": [tc.get("tool") for tc in tool_calls],
+                    "timing_breakdown": timing_breakdown,
                 },
             }
-            # Expose tool_outputs for eval field_present checks (session_id starts with eval-)
-            if session_id and session_id.startswith("eval-"):
-                out["tool_outputs"] = effective_tool_outputs if self.use_verification and self.verification else tool_outputs
             return out
 
         except Exception as e:
@@ -371,6 +430,7 @@ class GhostfolioAgent:
                 "metadata": {
                     "processing_time_ms": round((time.time() - start_time) * 1000, 2),
                     "error": str(e),
+                    "timing_breakdown": timing_breakdown,
                 },
             }
 
@@ -386,6 +446,8 @@ class GhostfolioAgent:
         """Clear conversation history for a session."""
         if session_id in self._conversation_history:
             del self._conversation_history[session_id]
+            # Also clean up session access tracking
+            self._session_last_accessed.pop(session_id, None)
             return True
         return False
 

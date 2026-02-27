@@ -72,8 +72,8 @@ def calculate_cost(
     Returns:
         Cost in USD
     """
-    # Normalize model name
-    model_key = model.lower().replace("-", "-")
+    # Normalize model name (convert underscores to hyphens for consistent matching)
+    model_key = model.lower().replace("_", "-")
     if model_key not in MODEL_PRICING:
         # Default to gpt-4o-mini pricing for unknown models
         model_key = "gpt-4o-mini"
