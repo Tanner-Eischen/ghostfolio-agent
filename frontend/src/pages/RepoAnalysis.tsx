@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { healthApi, repoApi, strategyApi } from '../api/client';
+import { healthApi, repoApi } from '../api/client';
 import type {
   HealthResponse,
   RepoInfo,
@@ -8,7 +8,6 @@ import type {
   FileNode,
   InjectionPoint,
   CodebaseInsight,
-  StrategyConfig,
 } from '../api/client';
 import { Sidebar } from '../components/layout/Sidebar';
 import { RepoConnector } from '../components/RepoConnector';
@@ -98,58 +97,6 @@ function FileTreeItem({ node, depth = 0, selectedPath, onSelect }: {
   );
 }
 
-// Strategy config summary component
-function StrategySummary({ config }: { config: StrategyConfig | null }) {
-  const [showDetails, setShowDetails] = useState(false);
-
-  if (!config) return null;
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setShowDetails(!showDetails)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-dark border border-surface-border hover:border-primary/50 transition-colors"
-      >
-        <span className="material-symbols-outlined text-primary text-sm">hub</span>
-        <span className="text-sm font-medium text-slate-300">{config.framework}</span>
-        <span className="text-xs text-text-dim">|</span>
-        <span className="text-sm text-text-dim">{config.model.split(' ')[0]}</span>
-        <span className="material-symbols-outlined text-text-dim text-sm">
-          {showDetails ? 'expand_less' : 'expand_more'}
-        </span>
-      </button>
-
-      {showDetails && (
-        <div className="absolute top-full right-0 mt-2 w-72 bg-surface-dark border border-surface-border rounded-xl shadow-xl z-50 p-4">
-          <h4 className="text-sm font-bold text-white mb-3">Agent Configuration</h4>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-text-dim">Framework</span>
-              <span className="text-white">{config.framework}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-text-dim">Model</span>
-              <span className="text-white">{config.model}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-text-dim">JSON Mode</span>
-              <span className={config.json_mode ? 'text-emerald-400' : 'text-text-dim'}>
-                {config.json_mode ? 'On' : 'Off'}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-text-dim">Streaming</span>
-              <span className={config.stream_responses ? 'text-emerald-400' : 'text-text-dim'}>
-                {config.stream_responses ? 'On' : 'Off'}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function RepoAnalysis() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [repo, setRepo] = useState<RepoInfo | null>(null);
@@ -157,7 +104,6 @@ export function RepoAnalysis() {
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [injectionPoints, setInjectionPoints] = useState<InjectionPoint[]>([]);
   const [insights, setInsights] = useState<CodebaseInsight | null>(null);
-  const [strategyConfig, setStrategyConfig] = useState<StrategyConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [mapMode, setMapMode] = useState<MapMode>('full');
   const [zoom, setZoom] = useState(1);
@@ -175,17 +121,6 @@ export function RepoAnalysis() {
     try {
       const healthData = await healthApi.check();
       setHealth(healthData);
-
-      // Load strategy config
-      const stratConfig = await strategyApi.get().catch(() => ({
-        framework: 'LangGraph',
-        model: 'GPT-4o (OpenAI)',
-        temperature: 0.0,
-        json_mode: true,
-        stream_responses: false,
-        contribution_path: 'langchain',
-      }));
-      setStrategyConfig(stratConfig as StrategyConfig);
 
       if (connectedRepo) {
         // Fetch all data from connected repo
@@ -333,12 +268,13 @@ export function RepoAnalysis() {
         )}
 
         {/* Header */}
-        <div className="sticky top-0 z-10 bg-background-dark/95 backdrop-blur-sm border-b border-surface-border px-6 py-4 flex justify-between items-end">
+        <div className="sticky top-0 z-10 bg-background-dark/95 backdrop-blur-sm border-b border-surface-border px-6 py-4 flex justify-between items-center">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-slate-400 text-sm">Repo Analysis /</span>
+              <span className="text-slate-400 text-sm">Repo Analysis</span>
+              <span className="text-slate-500">/</span>
               <span className="text-primary font-mono text-sm">
-                {connectedRepo ? connectedRepo.name : 'ghostfolio-agent'}
+                {connectedRepo ? connectedRepo.name : 'No repository connected'}
               </span>
               {connectedRepo && (
                 <span className="ml-2 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-xs">
@@ -346,23 +282,15 @@ export function RepoAnalysis() {
                 </span>
               )}
             </div>
-            <h1 className="text-2xl font-bold text-white">Codebase Analysis & Mapping</h1>
+            <h1 className="text-xl font-bold text-white">Connect &amp; analyze</h1>
           </div>
-          <div className="flex gap-3 items-center">
-            <StrategySummary config={strategyConfig} />
-            {repo && (
-              <>
-                <span className="px-3 py-1 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 text-xs font-medium flex items-center gap-1">
-                  <span className="material-symbols-outlined text-sm">check_circle</span>
-                  {repo.endpoints} Endpoints
-                </span>
-                <span className="px-3 py-1 rounded-full border border-surface-border bg-surface-dark text-slate-400 text-xs font-medium flex items-center gap-1">
-                  <span className="material-symbols-outlined text-sm">account_tree</span>
-                  {repo.services} Modules
-                </span>
-              </>
-            )}
-          </div>
+          {repo && (
+            <div className="flex gap-2 items-center text-xs text-slate-400">
+              <span>{repo.endpoints} endpoints</span>
+              <span>·</span>
+              <span>{repo.services} modules</span>
+            </div>
+          )}
         </div>
 
         {/* Content */}
@@ -375,34 +303,8 @@ export function RepoAnalysis() {
           />
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            {/* Structural Breakdown */}
             <div className="flex flex-col gap-4">
-              <div className="bg-surface-dark border border-surface-border rounded-xl p-4 flex justify-between items-center shadow-sm">
-                <div className="flex items-center gap-4">
-                  <div className="p-3 rounded-lg bg-indigo-500/20 text-indigo-400">
-                    <span className="material-symbols-outlined text-2xl">schema</span>
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-100">Structural Breakdown</h3>
-                    <div className="flex gap-4 mt-1">
-                      <span className="text-xs text-slate-400">
-                        Total Routes: <span className="text-white font-mono">{repo?.endpoints || 0}</span>
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        Detected Modules: <span className="text-white font-mono">{repo?.services || 0}</span>
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        Tool Hooks: <span className="text-primary font-mono">{repo?.tool_hooks || 0}</span>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <button className="text-xs text-slate-400 hover:text-white border border-surface-border rounded px-3 py-1.5 transition-colors">
-                  View Report
-                </button>
-              </div>
-
-              {/* Code Preview - Injection Points */}
+              {/* Injection Points */}
               <div className="bg-surface-darker rounded-xl border border-surface-border overflow-hidden shadow-sm flex-1 min-h-[400px]">
                 <div className="flex items-center justify-between px-4 py-2 bg-surface-dark border-b border-surface-border">
                   <div className="flex items-center gap-2">
@@ -441,70 +343,60 @@ export function RepoAnalysis() {
               </div>
             </div>
 
-            {/* Insight Panel */}
+            {/* Insight + Health + Mapper */}
             <div className="flex flex-col gap-6">
-              <div className="p-5 rounded-xl bg-gradient-to-br from-surface-dark to-surface-darker border border-primary/30 shadow-lg relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 blur-[50px] rounded-full pointer-events-none" />
+              <div className="p-5 rounded-xl bg-surface-dark border border-surface-border">
                 <div className="flex items-start gap-4">
                   <div className="p-2 rounded-lg bg-primary/20 text-primary">
                     <span className="material-symbols-outlined text-2xl">auto_fix_high</span>
                   </div>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <h3 className="text-lg font-bold text-white mb-1">Codebase Insight</h3>
-                    <p className="text-sm text-slate-400 leading-relaxed mb-4">
+                    <p className="text-sm text-slate-400 leading-relaxed">
                       {insights?.summary || (connectedRepo
                         ? 'Analyzing codebase structure...'
-                        : 'Connect a repository to get AI-powered insights')}
+                        : 'Connect a repository to get insights')}
                     </p>
                     {insights?.entry_points && insights.entry_points.length > 0 && (
-                      <div className="mb-3">
-                        <span className="text-xs text-slate-500">Entry Points: </span>
+                      <div className="mt-2">
+                        <span className="text-xs text-slate-500">Entry points: </span>
                         {insights.entry_points.map((ep, i) => (
                           <code key={i} className="text-primary text-xs mr-2">{ep}</code>
                         ))}
                       </div>
                     )}
-                    <div className="flex gap-3">
-                      <button className="text-xs font-medium bg-primary text-surface-darker px-3 py-1.5 rounded hover:bg-cyan-400 transition-colors">
-                        Accept Mapping
-                      </button>
-                      <button className="text-xs font-medium text-slate-400 hover:text-white px-3 py-1.5 transition-colors">
-                        View Alternatives
-                      </button>
-                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Health Status */}
-              <div className="bg-surface-dark rounded-xl border border-surface-border p-4">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-3">System Health</h4>
-                <div className="space-y-2">
-                  {health?.dependencies && Object.entries(health.dependencies).map(([key, value]) => (
-                    <div key={key} className="flex items-center justify-between">
-                      <span className="text-sm text-white capitalize">{key.replace(/_/g, ' ')}</span>
-                      <span className={`flex items-center gap-1.5 text-xs font-medium ${
-                        value ? 'text-emerald-400' : 'text-red-400'
-                      }`}>
-                        <span className={`h-2 w-2 rounded-full ${value ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`} />
-                        {value ? 'Operational' : 'Unavailable'}
+              {/* System Health - compact */}
+              {health?.dependencies && (
+                <div className="bg-surface-dark rounded-xl border border-surface-border p-3">
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">System Health</h4>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                    {Object.entries(health.dependencies).map(([key, value]) => (
+                      <span key={key} className={value ? 'text-emerald-400' : 'text-red-400'}>
+                        {key.replace(/_/g, ' ')}: {value ? 'OK' : 'Unavailable'}
                       </span>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
-              {/* Dependency Mapper */}
+              {/* Dependency Mapper - Phase 1 placeholder / minimal */}
               <div className="flex-1 rounded-xl bg-surface-dark border border-surface-border flex flex-col overflow-hidden min-h-[300px]">
                 <div className="px-5 py-3 border-b border-surface-border flex justify-between items-center bg-surface-darker">
-                  <h3 className="text-sm font-semibold text-slate-300">Dependency Mapper</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-slate-300">Dependency Mapper</h3>
+                    <span className="text-[10px] text-slate-500 bg-surface-dark px-1.5 py-0.5 rounded">Phase 1</span>
+                  </div>
                   <div className="flex gap-2">
                     <span className="size-2 rounded-full bg-primary" />
                     <span className="text-xs text-slate-500">Agent</span>
                     <span className="size-2 rounded-full bg-indigo-400 ml-2" />
                     <span className="text-xs text-slate-500">Services</span>
                     <span className="size-2 rounded-full bg-emerald-400 ml-2" />
-                    <span className="text-xs text-slate-500">Database</span>
+                    <span className="text-xs text-slate-500">DB</span>
                   </div>
                 </div>
 
@@ -615,12 +507,13 @@ export function RepoAnalysis() {
                     })}
                   </svg>
 
-                  {/* Loading state */}
+                  {/* Empty / loading state - non-blocking for other panels */}
                   {!dependencies && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-surface-dark/50">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-surface-dark/50 p-4 text-center">
                       <span className="text-slate-400 text-sm">
-                        {connectedRepo ? 'Mapping dependencies...' : 'Connect a repository to view dependencies'}
+                        {connectedRepo ? 'Loading dependency graph...' : 'Connect a repository to view dependencies'}
                       </span>
+                      <span className="text-xs text-slate-500">Richer layout and drill-down coming in Phase 2</span>
                     </div>
                   )}
                 </div>

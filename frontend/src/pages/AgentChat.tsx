@@ -1,7 +1,15 @@
 import { useEffect, useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { chatApi, repoApi, feedbackApi } from '../api/client';
-import type { ChatResponse, RepoConnection } from '../api/client';
+import { chatApi, repoApi, feedbackApi, toolsApi, toolSuggestionsApi } from '../api/client';
+import type {
+  ChatResponse,
+  RepoConnection,
+  Tool,
+  ToolDetail,
+  ToolSuggestion,
+  ToolSuggestionsResponse,
+  GeneratedToolResponse,
+} from '../api/client';
 
 interface ToolCall {
   name: string;
@@ -35,6 +43,8 @@ interface ToolInfo {
 
 // Storage keys
 const STORAGE_KEY = 'ghostfolio-agent-conversations';
+
+type AgentChatTab = 'chat' | 'tools';
 
 // Generate prebuilt questions based on available tools
 function generatePrebuiltQuestions(tools: ToolInfo[]): Array<{ icon: string; label: string; query: string }> {
@@ -164,6 +174,17 @@ export function AgentChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Tools / Schema tab state
+  const [activeTab, setActiveTab] = useState<AgentChatTab>('chat');
+  const [registeredTools, setRegisteredTools] = useState<Tool[]>([]);
+  const [toolDetails, setToolDetails] = useState<Record<string, ToolDetail>>({});
+  const [suggestions, setSuggestions] = useState<ToolSuggestion[]>([]);
+  const [suggestionsSummary, setSuggestionsSummary] = useState<string>('');
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [generatedTool, setGeneratedTool] = useState<GeneratedToolResponse | null>(null);
+  const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
+  const [toolsLoading, setToolsLoading] = useState(false);
+
   // Helper to show toast notifications
   const showToast = (message: string, type: Toast['type'] = 'success') => {
     const id = `toast-${Date.now()}`;
@@ -290,6 +311,68 @@ export function AgentChat() {
       }
     };
   }, []);
+
+  // Load registered tools when Tools tab is active
+  useEffect(() => {
+    if (activeTab !== 'tools') return;
+    let mounted = true;
+    setToolsLoading(true);
+    toolsApi
+      .list()
+      .then((list) => {
+        if (!mounted) return;
+        setRegisteredTools(list);
+        setSelectedToolIds((prev) => {
+          const next = new Set(prev);
+          list.forEach((t) => next.add(t.id));
+          return next;
+        });
+        return Promise.all(list.map((t) => toolsApi.get(t.name).catch(() => null)));
+      })
+      .then((details) => {
+        if (!mounted || !details) return;
+        const map: Record<string, ToolDetail> = {};
+        details.forEach((d) => {
+          if (d) map[d.name] = d;
+        });
+        setToolDetails(map);
+      })
+      .catch(() => {
+        if (mounted) setRegisteredTools([]);
+      })
+      .finally(() => {
+        if (mounted) setToolsLoading(false);
+      });
+    return () => { mounted = false; };
+  }, [activeTab]);
+
+  // Load tool suggestions from repo analysis when Tools tab is active and a repo is selected
+  useEffect(() => {
+    if (activeTab !== 'tools' || !selectedRepoId) {
+      setSuggestions([]);
+      setSuggestionsSummary('');
+      return;
+    }
+    let mounted = true;
+    setSuggestionsLoading(true);
+    toolSuggestionsApi
+      .getForRepo(selectedRepoId)
+      .then((res: ToolSuggestionsResponse) => {
+        if (!mounted) return;
+        setSuggestions(res.suggestions);
+        setSuggestionsSummary(res.analysis_summary);
+      })
+      .catch(() => {
+        if (mounted) {
+          setSuggestions([]);
+          setSuggestionsSummary('');
+        }
+      })
+      .finally(() => {
+        if (mounted) setSuggestionsLoading(false);
+      });
+    return () => { mounted = false; };
+  }, [activeTab, selectedRepoId]);
 
   const handleSend = async () => {
     if (!input.trim() || loading) return;
@@ -515,28 +598,62 @@ export function AgentChat() {
 
       {/* Main Chat Area */}
       <main className="flex-1 flex flex-col h-full bg-background-dark">
-        {/* Header */}
-        <header className="sticky top-0 z-10 bg-background-dark/95 backdrop-blur-sm border-b border-surface-border px-6 py-4 flex justify-between items-center">
-          <div>
-            <h1 className="text-xl font-bold text-white">Agent Chat</h1>
-            <p className="text-text-dim text-sm">Ask questions about your portfolio and investments</p>
+        {/* Header: tabs (Agent Chat | Tools / Schema) + utilities; subheading only for active tab */}
+        <header className="sticky top-0 z-10 bg-background-dark/95 backdrop-blur-sm border-b border-surface-border px-6 py-4">
+          <div className="flex justify-between items-center">
+            <div className="flex gap-1" role="tablist" aria-label="Chat or Tools view">
+              <button
+                role="tab"
+                aria-selected={activeTab === 'chat'}
+                onClick={() => setActiveTab('chat')}
+                className={`px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-colors ${
+                  activeTab === 'chat'
+                    ? 'text-white bg-surface-dark border-b-2 border-primary -mb-px'
+                    : 'text-text-dim hover:text-white'
+                }`}
+              >
+                Agent Chat
+              </button>
+              <button
+                role="tab"
+                aria-selected={activeTab === 'tools'}
+                onClick={() => setActiveTab('tools')}
+                className={`px-4 py-2.5 text-sm font-semibold rounded-t-lg transition-colors ${
+                  activeTab === 'tools'
+                    ? 'text-white bg-surface-dark border-b-2 border-primary -mb-px'
+                    : 'text-text-dim hover:text-white'
+                }`}
+              >
+                Tools / Schema
+              </button>
+            </div>
+            <div className="flex items-center gap-3">
+              {selectedRepoId && (
+                <span className="flex items-center gap-1 px-2 py-1 bg-surface-dark border border-surface-border rounded text-xs text-text-dim">
+                  <span className="material-symbols-outlined text-sm">fork_right</span>
+                  {connections.find(c => c.id === selectedRepoId)?.name || 'Unknown'}
+                </span>
+              )}
+              <button
+                onClick={() => copyToClipboard(sessionId)}
+                className="flex items-center gap-1 px-2 py-1 bg-surface-dark border border-surface-border rounded text-xs text-text-dim hover:text-white transition-colors"
+                title="Copy session ID"
+              >
+                <span className="material-symbols-outlined text-sm">content_copy</span>
+                {sessionId.substring(0, 8)}...
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            {selectedRepoId && (
-              <span className="flex items-center gap-1 px-2 py-1 bg-surface-dark border border-surface-border rounded text-xs text-text-dim">
-                <span className="material-symbols-outlined text-sm">fork_right</span>
-                {connections.find(c => c.id === selectedRepoId)?.name || 'Unknown'}
-              </span>
-            )}
-            <button
-              onClick={() => copyToClipboard(sessionId)}
-              className="flex items-center gap-1 px-2 py-1 bg-surface-dark border border-surface-border rounded text-xs text-text-dim hover:text-white transition-colors"
-              title="Copy session ID"
-            >
-              <span className="material-symbols-outlined text-sm">content_copy</span>
-              {sessionId.substring(0, 8)}...
-            </button>
-          </div>
+          {activeTab === 'chat' && (
+            <p className="text-text-dim text-sm mt-2" role="status">
+              Ask questions about your portfolio and investments
+            </p>
+          )}
+          {activeTab === 'tools' && (
+            <p className="text-text-dim text-sm mt-2" role="status">
+              View and manage tool schemas; get suggestions from repo analysis
+            </p>
+          )}
         </header>
 
         {/* Error Toast */}
@@ -566,6 +683,8 @@ export function AgentChat() {
           ))}
         </div>
 
+        {activeTab === 'chat' && (
+          <>
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {initialLoading ? (
@@ -746,6 +865,189 @@ export function AgentChat() {
             </div>
           </div>
         </div>
+          </>
+        )}
+
+        {activeTab === 'tools' && (
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+            {/* Current tools schema */}
+            <section className="rounded-xl bg-surface-dark border border-surface-border overflow-hidden">
+              <h2 className="px-4 py-3 border-b border-surface-border text-white font-semibold flex items-center gap-2">
+                <span className="material-symbols-outlined">build</span>
+                Registered tools
+              </h2>
+              <div className="p-4">
+                {toolsLoading ? (
+                  <div className="flex items-center gap-2 text-text-dim">
+                    <span className="material-symbols-outlined animate-spin">progress_activity</span>
+                    Loading tools…
+                  </div>
+                ) : registeredTools.length === 0 ? (
+                  <p className="text-text-dim text-sm">No tools registered.</p>
+                ) : (
+                  <ul className="space-y-3">
+                    {registeredTools.map((t) => {
+                      const detail = toolDetails[t.name];
+                      const isSelected = selectedToolIds.has(t.id);
+                      return (
+                        <li
+                          key={t.id}
+                          className="rounded-lg border border-surface-border bg-surface-darker/50 overflow-hidden"
+                        >
+                          <div className="flex items-center gap-3 p-3">
+                            <input
+                              type="checkbox"
+                              id={`tool-${t.id}`}
+                              checked={isSelected}
+                              onChange={() => {
+                                setSelectedToolIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(t.id)) next.delete(t.id);
+                                  else next.add(t.id);
+                                  return next;
+                                });
+                              }}
+                              className="rounded border-surface-border text-primary focus:ring-primary"
+                              aria-label={`Enable or disable tool: ${t.name}`}
+                            />
+                            <label htmlFor={`tool-${t.id}`} className="flex-1 cursor-pointer">
+                              <span className="font-medium text-white">{t.name}</span>
+                              {t.description && (
+                                <span className="text-text-dim text-sm block mt-0.5">{t.description}</span>
+                              )}
+                            </label>
+                          </div>
+                          {detail && (Object.keys(detail.parameters || {}).length > 0 || detail.args_schema) && (
+                            <div className="px-3 pb-3 pt-0">
+                              <details className="text-sm">
+                                <summary className="cursor-pointer text-text-dim hover:text-white py-1">
+                                  Schema / parameters
+                                </summary>
+                                <div className="mt-2 pl-2 border-l-2 border-surface-border space-y-1 text-text-dim">
+                                  {detail.parameters && Object.keys(detail.parameters).length > 0 && (
+                                    <pre className="text-xs overflow-x-auto bg-background-dark p-2 rounded">
+                                      {JSON.stringify(detail.parameters, null, 2)}
+                                    </pre>
+                                  )}
+                                  {detail.args_schema && (
+                                    <pre className="mt-2 text-xs overflow-x-auto bg-background-dark p-2 rounded">
+                                      {typeof detail.args_schema === 'string'
+                                        ? detail.args_schema
+                                        : JSON.stringify(detail.args_schema, null, 2)}
+                                    </pre>
+                                  )}
+                                </div>
+                              </details>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </section>
+
+            {/* Tool schema suggestor (from repo analysis) */}
+            <section className="rounded-xl bg-surface-dark border border-surface-border overflow-hidden">
+              <h2 className="px-4 py-3 border-b border-surface-border text-white font-semibold flex items-center gap-2">
+                <span className="material-symbols-outlined">lightbulb</span>
+                Suggested tools from repo
+              </h2>
+              <div className="p-4">
+                {!selectedRepoId ? (
+                  <p className="text-text-dim text-sm">
+                    Connect a repo on the Repo Analysis page and select it in the sidebar to see suggestions based on your codebase.
+                  </p>
+                ) : suggestionsLoading ? (
+                  <div className="flex items-center gap-2 text-text-dim">
+                    <span className="material-symbols-outlined animate-spin">progress_activity</span>
+                    Loading suggestions…
+                  </div>
+                ) : (
+                  <>
+                    {suggestionsSummary && (
+                      <p className="text-text-dim text-sm mb-4 pb-3 border-b border-surface-border">
+                        {suggestionsSummary}
+                      </p>
+                    )}
+                    {suggestions.length === 0 ? (
+                      <p className="text-text-dim text-sm">No tool suggestions for this repo yet.</p>
+                    ) : (
+                      <ul className="space-y-3">
+                        {suggestions.map((s) => (
+                          <li
+                            key={s.id}
+                            className="rounded-lg border border-surface-border bg-surface-darker/50 p-3"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-medium text-white">{s.name}</span>
+                                {s.source_type && (
+                                  <span className="ml-2 text-xs text-text-dim">{s.source_type}</span>
+                                )}
+                                {s.description && (
+                                  <p className="text-text-dim text-sm mt-1">{s.description}</p>
+                                )}
+                                {s.reasoning && (
+                                  <p className="text-text-dim text-xs mt-1 italic">{s.reasoning}</p>
+                                )}
+                                {s.parameters?.length ? (
+                                  <div className="mt-2 text-xs text-text-dim">
+                                    Parameters: {s.parameters.map((p) => p.name).join(', ')}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  toolSuggestionsApi
+                                    .generateTool(selectedRepoId!, { suggestion_id: s.id })
+                                    .then((res) => setGeneratedTool(res))
+                                    .catch(() => setGeneratedTool(null));
+                                }}
+                                className="flex-shrink-0 px-3 py-1.5 bg-primary text-surface-darker text-sm font-medium rounded-lg hover:bg-primary-hover transition-colors"
+                              >
+                                Generate
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+
+            {/* Generated tool modal / block */}
+            {generatedTool && (
+              <section className="rounded-xl bg-surface-dark border border-primary/30 overflow-hidden">
+                <div className="px-4 py-3 border-b border-surface-border flex items-center justify-between">
+                  <h3 className="text-white font-semibold">Generated tool</h3>
+                  <button
+                    type="button"
+                    onClick={() => setGeneratedTool(null)}
+                    className="text-text-dim hover:text-white p-1 rounded"
+                    aria-label="Close"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
+                <div className="p-4">
+                  {generatedTool.generated_code && (
+                    <pre className="text-xs overflow-x-auto bg-background-dark p-4 rounded border border-surface-border text-slate-300 whitespace-pre-wrap">
+                      {generatedTool.generated_code}
+                    </pre>
+                  )}
+                  {generatedTool.name && (
+                    <p className="text-text-dim text-sm mt-2">Tool: {generatedTool.name} — {generatedTool.description}</p>
+                  )}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
       </main>
     </div>
   );

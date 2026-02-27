@@ -87,6 +87,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not pre-initialize agent: {e}")
 
+    # Ensure Git is available for repo connect (clone)
+    try:
+        manager = get_repo_manager()
+        git_ok, git_error = await manager._check_git_available()
+        if not git_ok:
+            logger.warning(
+                "Git is not available at startup: %s. Repo connect (clone) will fail until Git is installed and in PATH.",
+                git_error,
+            )
+        else:
+            logger.info("Git is available for repository cloning")
+    except Exception as e:
+        logger.warning("Could not check Git at startup: %s", e)
+
     yield
 
     logger.info("Shutting down Ghostfolio Agent API")
@@ -208,6 +222,14 @@ async def health_check() -> HealthResponse:
     """
     agent_ready = _agent is not None
 
+    # Include Git availability (required for repo connect / clone)
+    git_available = False
+    try:
+        manager = get_repo_manager()
+        git_available, _ = await manager._check_git_available()
+    except Exception:
+        pass
+
     return HealthResponse(
         status="healthy",
         version="0.1.0",
@@ -218,6 +240,7 @@ async def health_check() -> HealthResponse:
             "langsmith": bool(settings.langsmith_api_key),
             "ghostfolio": bool(settings.ghostfolio_access_token),
             "tracing_enabled": is_tracing_enabled(),
+            "git": git_available,
         },
     )
 
@@ -605,8 +628,29 @@ async def connect_repo(request: RepoConnectionRequest) -> RepoConnectionResponse
     Returns:
         RepoConnectionResponse with connection details or error
     """
-    manager = get_repo_manager()
-    return await manager.connect(request)
+    try:
+        manager = get_repo_manager()
+        out = await manager.connect(request)
+        # Ensure UI always gets a message when success is False
+        if not out.success and not (out.error and out.error.strip()):
+            logger.warning("Repo connect returned success=False with no error message; source=%s", request.source)
+            out = RepoConnectionResponse(
+                success=False,
+                error="Connection failed. Try a public Git URL (e.g. https://github.com/ghostfolio/ghostfolio.git). If that also fails, ensure Git is installed where the backend runs and check server logs."
+            )
+        return out
+    except Exception as e:
+        # Always return 200 with success=False and a message so the UI can show it
+        logger.exception("Repo connect failed: %s (type=%s)", e, type(e).__name__)
+        msg = str(e).strip()
+        if not msg:
+            msg = (
+                "Connection failed. Try a public Git URL (e.g. https://github.com/ghostfolio/ghostfolio.git). "
+                "Ensure Git is installed where the backend runs and check server logs for details."
+            )
+        elif len(msg) > 500:
+            msg = msg[:500] + "..."
+        return RepoConnectionResponse(success=False, error=msg)
 
 
 @app.get("/repo/connections", response_model=ConnectionsListResponse, tags=["Repo"])
@@ -619,6 +663,11 @@ async def list_connections() -> ConnectionsListResponse:
     manager = get_repo_manager()
     connections = manager.list_connections()
     return ConnectionsListResponse(connections=connections)
+
+
+def _repo_not_found(repo_id: str) -> HTTPException:
+    """Consistent 404 for missing or stale repository connections."""
+    return HTTPException(status_code=404, detail=f"Repository connection '{repo_id}' not found")
 
 
 @app.delete("/repo/{repo_id}", tags=["Repo"])
@@ -637,7 +686,7 @@ async def disconnect_repo(repo_id: str) -> dict[str, bool]:
     manager = get_repo_manager()
     if manager.disconnect(repo_id):
         return {"success": True}
-    raise HTTPException(status_code=404, detail=f"Connection {repo_id} not found")
+    raise _repo_not_found(repo_id)
 
 
 # ============================================================================
@@ -756,13 +805,10 @@ async def get_connected_repo_info(repo_id: str) -> RepoInfoResponse:
     """
     manager = get_repo_manager()
     repo_path = manager.get_repo_path(repo_id)
-
-    if not repo_path:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
-
     connection = manager.get_connection(repo_id)
-    if not connection:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+
+    if not repo_path or not connection:
+        raise _repo_not_found(repo_id)
 
     # Analyze the connected repository
     modules = _detect_modules(target_path=repo_path)
@@ -1273,7 +1319,7 @@ async def get_connected_repo_dependencies(repo_id: str) -> DependenciesResponse:
     repo_path = manager.get_repo_path(repo_id)
 
     if not repo_path:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+        raise _repo_not_found(repo_id)
 
     nodes, edges = _analyze_repo_dependencies(target_path=repo_path)
     return DependenciesResponse(nodes=nodes, edges=edges)
@@ -1297,7 +1343,7 @@ async def get_module_dependencies(repo_id: str, module_name: str) -> Dependencie
     repo_path = manager.get_repo_path(repo_id)
 
     if not repo_path:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+        raise _repo_not_found(repo_id)
 
     nodes, edges = _analyze_module_dependencies(repo_path, module_name)
     return DependenciesResponse(nodes=nodes, edges=edges)
@@ -1364,7 +1410,7 @@ async def get_repo_files(repo_id: str, max_depth: int = 3) -> FileTreeResponse:
     repo_path = manager.get_repo_path(repo_id)
 
     if not repo_path:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+        raise _repo_not_found(repo_id)
 
     def build_tree(path: Path, depth: int = 0) -> FileNode:
         name = path.name
@@ -1411,7 +1457,7 @@ async def get_injection_points(repo_id: str, limit: int = 10) -> InjectionPoints
     repo_path = manager.get_repo_path(repo_id)
 
     if not repo_path:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+        raise _repo_not_found(repo_id)
 
     points = []
     route_patterns = [
@@ -1474,7 +1520,7 @@ async def get_codebase_insights(repo_id: str) -> CodebaseInsight:
     repo_path = manager.get_repo_path(repo_id)
 
     if not repo_path:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+        raise _repo_not_found(repo_id)
 
     connection = manager.get_connection(repo_id)
     repo_name = connection.name if connection else "Unknown"
@@ -1859,7 +1905,7 @@ async def get_tool_suggestions(repo_id: str) -> ToolSuggestionsResponse:
     connection = manager.get_connection(repo_id)
 
     if not repo_path or not connection:
-        raise HTTPException(status_code=404, detail=f"Repository connection {repo_id} not found")
+        raise _repo_not_found(repo_id)
 
     suggestions: list[ToolSuggestion] = []
 

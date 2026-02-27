@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 
 interface NavItem {
   label: string;
@@ -16,24 +16,29 @@ const navItems: NavItem[] = [
 
 export function Navigation() {
   return (
-    <header className="sticky top-0 z-50 flex items-center justify-between whitespace-nowrap border-b border-solid border-surface-border bg-background-dark/80 backdrop-blur-md px-6 py-3">
-      <div className="flex items-center gap-6">
-        {/* Brand */}
-        <div className="flex items-center gap-3 text-white">
+    <header className="sticky top-0 z-50 flex items-center justify-between flex-wrap gap-2 border-b border-solid border-surface-border bg-background-dark/80 backdrop-blur-md px-4 sm:px-6 py-3">
+      <div className="flex items-center gap-4 sm:gap-6 flex-wrap">
+        {/* Brand - clickable home */}
+        <Link
+          to="/"
+          className="flex items-center gap-3 text-white hover:opacity-90 transition-opacity rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
+          title="Repo Analysis"
+        >
           <div className="flex h-8 w-8 items-center justify-center rounded bg-primary/20 text-primary">
             <span className="material-symbols-outlined">smart_toy</span>
           </div>
           <h2 className="text-lg font-bold leading-tight tracking-[-0.015em]">
             Ghostfolio Agent
           </h2>
-        </div>
+        </Link>
 
-        {/* Nav Links */}
-        <nav className="hidden md:flex items-center gap-1">
+        {/* Nav Links - always visible */}
+        <nav className="flex items-center gap-1" aria-label="Main navigation">
           {navItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
+              end={item.path === '/'}
               className={({ isActive }) =>
                 `px-3 py-2 text-sm font-medium leading-normal rounded-lg transition-colors ${
                   isActive

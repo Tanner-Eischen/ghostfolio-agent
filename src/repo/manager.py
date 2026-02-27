@@ -145,6 +145,11 @@ class RepoManager:
 
             return True, "", "git"
 
+        # Block URLs with blocked schemes (e.g. file://) before treating as local path
+        parsed = urlparse(source)
+        if parsed.scheme and parsed.scheme.lower() in BLOCKED_PROTOCOLS:
+            return False, f"Protocol '{parsed.scheme}' is not allowed", None
+
         # Treat as local path
         return self._validate_local_path(source)
 
@@ -176,9 +181,12 @@ class RepoManager:
             if path_str.lower().startswith(sensitive.lower()):
                 return False, f"Access to system directories is not allowed", None
 
-        # Check path exists and is a directory
+        # Check path exists and is a directory (path is resolved on the server)
         if not resolved.exists():
-            return False, f"Path does not exist: {path}", None
+            return False, (
+                "That path does not exist on this machine. "
+                "Local paths are checked where the backend runs—use a path that exists there, or connect with a Git URL instead (e.g. https://github.com/user/repo.git)."
+            ), None
 
         if not resolved.is_dir():
             return False, f"Path is not a directory: {path}", None
@@ -232,16 +240,30 @@ class RepoManager:
         now = datetime.utcnow().isoformat()
 
         if source_type == "git":
-            # Clone the repository
+            # Check Git is available before attempting clone (avoids opaque failures on Windows)
+            git_ok, git_error = await self._check_git_available()
+            if not git_ok:
+                return RepoConnectionResponse(success=False, error=git_error)
+
             clone_path = self.repos_dir / repo_id
 
             try:
                 await self._clone_repo(request.source, clone_path, request.branch)
-            except Exception as e:
-                logger.error(f"Failed to clone repository: {e}")
+            except FileNotFoundError:
                 return RepoConnectionResponse(
                     success=False,
-                    error=f"Failed to clone repository: {e}"
+                    error="Git is not installed or not in PATH. Install Git to clone repositories."
+                )
+            except RuntimeError as e:
+                msg = (str(e) or "").strip()
+                if not msg:
+                    msg = "Clone failed. Check the URL and network, and ensure Git is installed where the backend runs."
+                return RepoConnectionResponse(success=False, error=msg)
+            except Exception as e:
+                logger.exception("Failed to clone repository: %s", e)
+                return RepoConnectionResponse(
+                    success=False,
+                    error="Clone failed. Try a public Git URL (e.g. https://github.com/ghostfolio/ghostfolio.git). If that also fails, ensure Git is installed where the backend runs and check server logs."
                 )
 
             connection = RepoConnection(
@@ -271,6 +293,59 @@ class RepoManager:
 
         return RepoConnectionResponse(success=True, connection=connection)
 
+    def _normalize_clone_error(self, raw: str) -> str:
+        """Turn git clone stderr into a short, user-safe message."""
+        if not raw or not raw.strip():
+            return "Clone failed. Check the URL and network, and ensure Git is installed."
+        msg = raw.strip()
+        # Decode / truncate for safety and readability
+        if len(msg) > 400:
+            msg = msg[:400] + "..."
+        # One line for UI
+        msg = " ".join(msg.splitlines()).strip()
+        lower = msg.lower()
+        if "not recognized" in lower or "command not found" in lower or "not found" in lower and "git" in lower:
+            return "Git is not installed or not in PATH. Install Git and ensure it is available in your shell."
+        if "could not read username" in lower or "authentication failed" in lower or "support for password authentication was removed" in lower:
+            return "Authentication failed. Use a personal access token (PAT) or SSH key instead of a password."
+        if "repository not found" in lower or "could not find repository" in lower or "404" in msg:
+            return "Repository not found. Check the URL and that you have access."
+        if "connection refused" in lower or "could not resolve host" in lower or "failed to connect" in lower:
+            return "Network error. Check your connection and try again."
+        if "permission denied" in lower or "access denied" in lower or "denied" in lower:
+            return "Access denied. Check credentials and repository permissions."
+        if "already exists" in lower and "directory" in lower:
+            return "Clone target directory already exists (a previous clone may have failed). Try again or use a different repo."
+        return msg
+
+    async def _check_git_available(self) -> tuple[bool, str]:
+        """Return (True, '') if git is in PATH and works; else (False, error_message)."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5.0)
+        except FileNotFoundError:
+            return (
+                False,
+                "Git is not installed or not in PATH. Install Git and ensure it is available where the backend runs (e.g. restart the backend from a shell where 'git --version' works).",
+            )
+        except asyncio.TimeoutError:
+            return (False, "Git did not respond in time. Check that Git is installed and in PATH.")
+        except Exception as e:
+            logger.warning("Git check failed: %s", e)
+            return (
+                False,
+                "Git could not be run. Install Git and ensure it is in PATH where the backend runs.",
+            )
+        if process.returncode != 0:
+            err = (stderr or stdout or b"").decode("utf-8", errors="replace").strip() or "Unknown error"
+            return (False, f"Git is not available: {err}")
+        return (True, "")
+
     async def _clone_repo(self, url: str, target_path: Path, branch: Optional[str] = None) -> None:
         """Clone a git repository with timeout.
 
@@ -280,6 +355,7 @@ class RepoManager:
             branch: Optional branch to checkout
 
         Raises:
+            FileNotFoundError: If git executable is not found
             RuntimeError: If clone fails or times out
         """
         cmd = ["git", "clone", "--depth", "1"]
@@ -297,7 +373,10 @@ class RepoManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+        except FileNotFoundError:
+            raise
 
+        try:
             try:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(),
@@ -305,16 +384,31 @@ class RepoManager:
                 )
             except asyncio.TimeoutError:
                 process.kill()
+                if target_path.exists():
+                    try:
+                        shutil.rmtree(target_path)
+                    except Exception as e:
+                        logger.warning(f"Cleanup after timeout failed: {e}")
                 raise RuntimeError(f"Clone timed out after {CLONE_TIMEOUT_SECONDS} seconds")
 
             if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else "Unknown error"
-                raise RuntimeError(f"Clone failed: {error_msg}")
+                err_bytes = stderr or stdout or b""
+                try:
+                    error_raw = err_bytes.decode("utf-8", errors="replace")
+                except Exception:
+                    error_raw = str(err_bytes)[:300]
+                if target_path.exists():
+                    try:
+                        shutil.rmtree(target_path)
+                    except Exception as e:
+                        logger.warning(f"Cleanup after clone failure failed: {e}")
+                normalized = self._normalize_clone_error(error_raw)
+                raise RuntimeError(normalized)
 
             logger.info(f"Successfully cloned to {target_path}")
 
         except FileNotFoundError:
-            raise RuntimeError("Git is not installed or not in PATH")
+            raise
 
     def get_repo_path(self, repo_id: str) -> Optional[Path]:
         """Get the filesystem path for a connected repository.

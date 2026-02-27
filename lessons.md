@@ -1,5 +1,94 @@
 # Lessons Learned
 
+## 2026-02-26: Clone Failed When Connecting a Repository
+
+**Summary**
+- Repo manager clone errors are now normalized into short, user-facing messages (Git not in PATH, auth failed, repo not found, network error, permission denied, directory already exists).
+- On clone failure or timeout, the partial clone directory is removed so retries work.
+- stderr is decoded with `errors="replace"` to avoid decode errors; RuntimeError from clone is returned as-is (no double "Clone failed." prefix).
+
+**Why**
+- Users saw generic or opaque "clone failed" when connecting a repository; common causes (auth, network, missing Git, 404) were not surfaced clearly.
+
+**What worked / what didn’t**
+- **Worked**: `_normalize_clone_error()` maps common git stderr phrases to one-line messages; cleanup of `target_path` on non-zero returncode and on timeout; FileNotFoundError from `create_subprocess_exec` still returned as Git not in PATH.
+
+**Assumptions**
+- Clone runs in a single process; cleanup is best-effort (log warning if rmtree fails).
+
+**Verification**
+- `pytest tests/test_api/test_routes.py -k repo` — 11 passed.
+
+**Follow-ups**
+- [Optional] Add a unit test that mocks subprocess to assert normalized messages for sample stderr strings.
+
+---
+
+## 2026-02-26: Agent Chat Tools / Schema Tab
+
+**Summary**
+- Added a second tab on the Agent Chat page: "Chat" and "Tools / Schema".
+- Tools tab shows: (1) registered tools list with expandable schema (parameters + args_schema), checkboxes to select/deselect tools for future use; (2) repo-based tool suggestor that loads suggestions from `toolSuggestionsApi.getForRepo(repoId)` when a repo is selected, with a "Generate" button per suggestion that calls `generateTool` and shows generated code in a dismissible block.
+- Schema display uses `ToolDetail.parameters` as a JSON object and `args_schema`; suggestions show name, description, source_type, reasoning, and parameters list.
+
+**Why**
+- User requested a tab to switch to tools/schema: view current schema, selection/editing of schema, and a suggestor using repo analysis to suggest useful tools.
+
+**What worked / what didn’t**
+- **Worked**: Loading tools on tab switch via `toolsApi.list()` and `toolsApi.get(name)` per tool; loading suggestions when Tools tab is active and `selectedRepoId` is set; guarding Promise.all result for possibly-undefined `details` in second `.then()` to fix TS build.
+- **Worked**: Selection state is local (`selectedToolIds`); no backend toggle yet—documented for future use. No schema edit persistence (no PATCH/PUT tools); "Save" for edits not added; generated tool is display-only.
+
+**Assumptions**
+- Backend `/tools` and `/tools/{name}` return id/name/description/parameters/args_schema as in client types; tool suggestor and generate-tool endpoints are under `/repo/{repo_id}/tool-suggestions` and `POST /repo/{repo_id}/generate-tool`.
+
+**Edge cases**
+- No repo selected: suggestor shows message to connect/select repo on Repo Analysis. Empty tools list or empty suggestions show friendly empty states. Generated tool block can be closed.
+
+**Verification**
+- `frontend: npm run build` — success. Lint clean on AgentChat.tsx.
+
+**Follow-ups**
+- [Optional] Backend support to enable/disable tools per session or globally and persist selection.
+- [Optional] Schema editing with save (e.g. PATCH tool or create new tool from edit).
+
+---
+
+## 2026-02-27: Simplify To Repo-First Experience (Plan Implementation)
+
+**Summary**
+- Repo Analysis page simplified: removed StrategySummary, Structural Breakdown card, decorative CTAs on Insight, fake Sidebar indexing progress and non-functional buttons.
+- Header and panels streamlined; Dependency Mapper labeled Phase 1 with non-blocking empty state.
+- Backend: consistent 404 via `_repo_not_found(repo_id)` for all repo analysis endpoints; RepoManager clone errors sanitized and file:// protocol blocked before local-path validation.
+- New route tests: repo connect (empty source, invalid protocol, embedded credentials, success), list connections, disconnect and analysis endpoints 404 for unknown repo_id.
+
+**Why**
+- Plan required repo-first UX, guardrails, and explicit checkoffs/acceptance criteria.
+- Stale or missing repo_id must return consistent error shape; clone failures must not leak internal paths.
+
+**What worked / what didn't**
+- **Worked**: Single `_repo_not_found(repo_id)` helper and replace_all for existing 404 raises.
+- **Worked**: Blocking URL schemes (e.g. file://) before local-path validation so file:// URLs return "Protocol not allowed" instead of "Path does not exist".
+- **Worked**: RepoManager connect() catching FileNotFoundError and RuntimeError with user-safe messages; generic Exception fallback with short message.
+
+**Assumptions**
+- Navigation and other pages (Chat, Verification, Observability) remain accessible; no change to App routes.
+- Dependency Mapper Phase 2 (layout, drill-down, perf) deferred.
+
+**Edge cases**
+- file:// and other blocked schemes rejected before path validation.
+- Clone timeout and "Git not installed" return clear messages; long stderr truncated to 300 chars.
+
+**Verification**
+- `pytest tests/test_api/test_routes.py` — 34 passed (including 11 new repo tests).
+- `frontend: npm run build` — success.
+- Manual: connect → analyze flow and chat page accessibility left for user to confirm.
+
+**Follow-ups**
+- [Optional] Manual E2E: connect public Git URL, confirm all four panels populate.
+- [Optional] Navigation pill shows connected repo name when available (e.g. from context or API).
+
+---
+
 ## 2026-02-27: Page 4 (ObservabilityCost) Deep Dive - 19 Bug Fixes and Improvements
 
 **Summary**

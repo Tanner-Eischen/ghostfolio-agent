@@ -33,6 +33,10 @@ source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
 pip install -r requirements.txt
 ```
 
+### Requirements
+
+- **Git** – Required for the backend to clone repositories (Repo Connect). Install [Git](https://git-scm.com/) and ensure it is in your PATH. The backend checks Git at startup and reports `dependencies.git` in `/health`.
+
 ### Setup
 
 1. Copy the environment template:

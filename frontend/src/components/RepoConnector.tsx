@@ -58,10 +58,26 @@ export function RepoConnector({ onConnected, onDisconnect, connectedRepo }: Repo
         setBranch('');
         setName('');
       } else {
-        setError(response.error || 'Failed to connect to repository');
+        const r = response as { error?: string; detail?: string; message?: string };
+        const msg = (r.error ?? r.detail ?? r.message ?? '').trim();
+        if (!msg) {
+          console.error('Repo connect failed; no error message from server:', response);
+        }
+        setError(
+          msg ||
+          'Failed to connect. Check the repository URL, ensure Git is installed, and that the backend is running.'
+        );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Connection failed');
+      const message = err instanceof Error ? err.message : 'Connection failed';
+      const isNetwork =
+        typeof message === 'string' &&
+        (message === 'Failed to fetch' || message.includes('NetworkError') || message.includes('Load failed'));
+      setError(
+        isNetwork
+          ? 'Could not reach the server. Check that the backend is running and the URL is correct.'
+          : message
+      );
     } finally {
       setLoading(false);
     }
