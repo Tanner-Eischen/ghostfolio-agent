@@ -929,14 +929,29 @@ def _detect_modules(target_path: Path | None = None) -> list[str]:
         List of module directory names
     """
     if target_path:
-        # Look for Python package directories in target
+        # Look for Python and TypeScript modules in target
         modules = []
+
+        # Check for common TypeScript project structures
+        for struct in ["apps", "libs", "src"]:
+            struct_path = target_path / struct
+            if struct_path.exists() and struct_path.is_dir():
+                for item in struct_path.iterdir():
+                    if item.is_dir() and not item.name.startswith(("_", ".")):
+                        modules.append(f"{struct}/{item.name}")
+
+        # Also check root level directories
         for item in target_path.iterdir():
-            if item.is_dir() and not item.name.startswith(("_", ".")) and item.name != "pycache__":
-                # Check if it's a Python package or a module directory
-                if (item / "__init__.py").exists() or any(item.rglob("*.py")):
+            if item.is_dir() and not item.name.startswith(("_", ".")) and item.name not in ("pycache", "pycache__", "__pycache__"):
+                # Skip common non-module directories
+                if item.name in {"node_modules", "dist", "build", "test", "tests", "docker", "prisma", "tools", "data"}:
+                    continue
+                # Check if it has Python or TypeScript code
+                has_code = (item / "__init__.py").exists() or any(item.rglob("*.py")) or any(item.rglob("*.ts"))
+                if has_code and not any(item.name in m for m in modules):
                     modules.append(item.name)
-        return sorted(modules)
+
+        return sorted(modules) if modules else ["(root)"]
     else:
         # Default behavior for ghostfolio-agent
         src_dir = Path(__file__).parent.parent
