@@ -46,6 +46,9 @@ SENSITIVE_PATHS = {
     "C:\\Windows", "C:\\Program Files", "C:\\Program Files (x86)",
 }
 
+# Branch name: allow common git ref characters (no path separators or injection)
+BRANCH_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9._/-]+$")
+
 # Path traversal patterns to block
 PATH_TRAVERSAL_PATTERNS = [
     r"\.\./",           # ../
@@ -54,6 +57,74 @@ PATH_TRAVERSAL_PATTERNS = [
     r"^/etc/",          # etc directory
     r"^/root/",         # root home
 ]
+
+# Common Git install locations when not in PATH (e.g. backend started from IDE)
+GIT_SEARCH_PATHS = [
+    Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Git" / "cmd" / "git.exe",
+    Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Git" / "bin" / "git.exe",
+    Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "Git" / "cmd" / "git.exe",
+    Path("/usr/bin/git"),
+    Path("/usr/local/bin/git"),
+]
+
+
+def ensure_git_on_path() -> None:
+    """Prepend Git to os.environ['PATH'] if not present and Git is in a common install location.
+    Call at app startup so the process has git available for clone.
+    """
+    if shutil.which("git"):
+        return
+    for p in GIT_SEARCH_PATHS:
+        if p.exists():
+            try:
+                git_dir = str(p.parent)
+                path_sep = ";" if os.name == "nt" else ":"
+                current = os.environ.get("PATH", "")
+                if git_dir not in current.split(path_sep):
+                    os.environ["PATH"] = git_dir + path_sep + current
+                    logger.info("Prepend Git to PATH for backend: %s", git_dir)
+            except Exception as e:
+                logger.warning("Could not prepend Git to PATH: %s", e)
+            return
+
+
+def _find_git_and_prepend_path() -> str:
+    """Find git executable and, if in a common install path, prepend to PATH so backend env has git.
+    Returns the path to the git executable (or 'git' if already in PATH).
+    """
+    ensure_git_on_path()
+    # 1. Already in PATH (or just prepended)
+    git_in_path = shutil.which("git")
+    if git_in_path:
+        return git_in_path
+
+    # 2. Search common install locations
+    for p in GIT_SEARCH_PATHS:
+        if p.exists():
+            try:
+                git_dir = str(p.parent)
+                path_sep = ";" if os.name == "nt" else ":"
+                current = os.environ.get("PATH", "")
+                if git_dir not in current.split(path_sep):
+                    os.environ["PATH"] = git_dir + path_sep + current
+                    logger.info("Prepend Git to PATH for backend: %s", git_dir)
+            except Exception as e:
+                logger.warning("Could not prepend Git to PATH: %s", e)
+            return str(p)
+
+    return "git"  # fallback; will raise FileNotFoundError with clear message
+
+
+# Resolve git executable once at module load so backend "has" git in its environment
+_GIT_EXE: str | None = None
+
+
+def _get_git_exe() -> str:
+    """Return path to git executable, finding it and optionally prepending to PATH if needed."""
+    global _GIT_EXE
+    if _GIT_EXE is None:
+        _GIT_EXE = _find_git_and_prepend_path()
+    return _GIT_EXE
 
 
 class RepoConnectionRequest(BaseModel):
@@ -119,12 +190,15 @@ class RepoManager:
         if not source:
             return False, "Source cannot be empty", None
 
+        # Block SSH-style URLs to match documented behavior (HTTPS only for clone)
+        if source.startswith("git@"):
+            return False, "SSH URLs (git@...) are not supported. Use an HTTPS URL instead.", None
+
         # Check for git URLs
         git_patterns = [
             r"^https?://",           # http:// or https://
             r"^git://",              # git://
-            r"^git@",                # git@host:path
-            r"^ssh://",              # ssh://
+            r"^ssh://",              # ssh:// (blocked below via BLOCKED_PROTOCOLS)
         ]
 
         is_git = any(re.match(pattern, source) for pattern in git_patterns)
@@ -239,9 +313,23 @@ class RepoManager:
         name = request.name or self._extract_repo_name(request.source)
         now = datetime.utcnow().isoformat()
 
+        if request.branch and request.branch.strip():
+            branch = request.branch.strip()
+            if not BRANCH_NAME_PATTERN.match(branch):
+                return RepoConnectionResponse(
+                    success=False,
+                    error="Invalid branch name. Use only letters, numbers, dots, underscores, hyphens, and slashes.",
+                )
+
         if source_type == "git":
             # Check Git is available before attempting clone (avoids opaque failures on Windows)
             git_ok, git_error = await self._check_git_available()
+            if not git_ok:
+                # Retry once after prepending Git to PATH (e.g. when backend started without Git in shell PATH)
+                ensure_git_on_path()
+                global _GIT_EXE
+                _GIT_EXE = None
+                git_ok, git_error = await self._check_git_available()
             if not git_ok:
                 return RepoConnectionResponse(success=False, error=git_error)
 
@@ -319,10 +407,11 @@ class RepoManager:
         return msg
 
     async def _check_git_available(self) -> tuple[bool, str]:
-        """Return (True, '') if git is in PATH and works; else (False, error_message)."""
+        """Return (True, '') if git is available and works; else (False, error_message)."""
+        git_exe = _get_git_exe()
         try:
             process = await asyncio.create_subprocess_exec(
-                "git",
+                git_exe,
                 "--version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -358,7 +447,8 @@ class RepoManager:
             FileNotFoundError: If git executable is not found
             RuntimeError: If clone fails or times out
         """
-        cmd = ["git", "clone", "--depth", "1"]
+        git_exe = _get_git_exe()
+        cmd = [git_exe, "clone", "--depth", "1"]
 
         if branch:
             cmd.extend(["--branch", branch])
@@ -465,13 +555,15 @@ class RepoManager:
         """
         # Validate connections still exist
         valid_connections = []
+        stale_ids = []
         for conn in self._connections.values():
             if Path(conn.path).exists():
                 valid_connections.append(conn)
             else:
-                # Auto-cleanup stale connections
                 logger.warning(f"Cleaning up stale connection: {conn.id}")
-                del self._connections[conn.id]
+                stale_ids.append(conn.id)
+        for repo_id in stale_ids:
+            del self._connections[repo_id]
 
         return valid_connections
 

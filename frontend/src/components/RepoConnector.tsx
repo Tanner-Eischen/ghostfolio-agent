@@ -15,6 +15,16 @@ interface RepoConnectorProps {
 // Predefined repos for quick connect
 const QUICK_REPOS = [
   {
+    name: 'Ghostfolio (local)',
+    source: 'ghostfolio',
+    description: 'Local clone in project folder (no clone, no Git required)',
+  },
+  {
+    name: 'Ghostfolio (Tanner)',
+    source: 'https://github.com/Tanner-Eischen/Ghostfolio',
+    description: 'Ghostfolio repo for analysis',
+  },
+  {
     name: 'Ghostfolio',
     source: 'https://github.com/ghostfolio/ghostfolio.git',
     description: 'Open source wealth management platform',

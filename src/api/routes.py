@@ -11,6 +11,7 @@ Task #15: Create FastAPI backend
 """
 
 import ast
+import re
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -34,6 +35,7 @@ from src.utils.logging import get_logger, setup_logging
 from src.utils.tracing import log_feedback, is_tracing_enabled
 from src.utils.usage_tracker import get_usage_stats, get_cost_projections
 from src.repo.manager import (
+    ensure_git_on_path,
     get_repo_manager,
     RepoConnectionRequest,
     RepoConnection,
@@ -78,6 +80,7 @@ def get_agent() -> GhostfolioAgent:
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     setup_logging()
+    ensure_git_on_path()  # So repo connect (clone) can find git when not in shell PATH
     logger.info(f"Starting Ghostfolio Agent API in {settings.environment} mode")
 
     # Pre-initialize agent on startup
@@ -901,6 +904,40 @@ def _analyze_python_imports(file_path: Path, target_path: Path | None = None, kn
     return imports
 
 
+def _analyze_ts_imports(
+    file_path: Path, repo_root: Path, modules: list[str]
+) -> set[str]:
+    """Extract internal module imports from a TypeScript/JavaScript file via regex.
+
+    Matches: import X from '@scope/name', from \"@scope/name\", from '../libs/name',
+    require('@scope/name'). Maps to module names (e.g. apps/api, libs/domain) by stem.
+    """
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, UnicodeDecodeError):
+        return set()
+    # Build stem -> module mapping (e.g. "api" -> "apps/api", "domain" -> "libs/domain")
+    stem_to_modules: dict[str, list[str]] = defaultdict(list)
+    for mod in modules:
+        stem = mod.split("/")[-1].split("\\")[-1]
+        stem_to_modules[stem].append(mod)
+    imports: set[str] = set()
+    # from '@scope/name' or from \"@scope/name\" or from '../path/name'
+    for m in re.finditer(
+        r"""(?:from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\))""",
+        content,
+    ):
+        path = (m.group(1) or m.group(2) or "").strip()
+        if not path:
+            continue
+        # Last segment as stem: @ghostfolio/domain -> domain, ../libs/domain -> domain
+        stem = path.replace("\\", "/").split("/")[-1].split("@")[-1]
+        if stem in stem_to_modules:
+            for mod in stem_to_modules[stem]:
+                imports.add(mod)
+    return imports
+
+
 def _count_fastapi_endpoints() -> int:
     """Count registered FastAPI endpoints.
 
@@ -932,36 +969,48 @@ def _count_tool_hooks() -> int:
 def _count_endpoints_in_path(target_path: Path) -> int:
     """Count API endpoints in a target repository.
 
-    Detects FastAPI routes (@app.get, @router.post), Flask routes (@app.route),
-    and similar patterns.
-
-    Args:
-        target_path: Path to the target repository
-
-    Returns:
-        Number of detected API endpoints
+    Detects FastAPI/Flask (Python), NestJS decorators, and Express (TypeScript/JavaScript).
     """
     count = 0
-
-    # Patterns to look for in Python files
-    route_patterns = [
+    py_patterns = [
         r"@app\.(get|post|put|delete|patch)\s*\(",
         r"@router\.(get|post|put|delete|patch)\s*\(",
         r"@app\.route\s*\(",
         r"@blueprint\.(get|post|put|delete|patch)\s*\(",
         r"@api\.resource\s*\(",
     ]
-
-    import re
-
+    ts_patterns = [
+        r"@(Get|Post|Put|Delete|Patch)\s*\(",
+        r"@(Get|Post|Put|Delete|Patch)\s*\(\s*\)",
+        r"\.(get|post|put|delete|patch)\s*\(",
+        r"app\.(get|post|put|delete|patch)\s*\(",
+        r"router\.(get|post|put|delete|patch)\s*\(",
+    ]
     for py_file in target_path.rglob("*.py"):
         try:
             content = py_file.read_text(encoding="utf-8")
-            for pattern in route_patterns:
+            for pattern in py_patterns:
                 count += len(re.findall(pattern, content, re.IGNORECASE))
         except (UnicodeDecodeError, FileNotFoundError):
             continue
-
+    for ts_file in target_path.rglob("*.ts"):
+        if ".spec." in ts_file.name or ".test." in ts_file.name:
+            continue
+        try:
+            content = ts_file.read_text(encoding="utf-8", errors="replace")
+            for pattern in ts_patterns:
+                count += len(re.findall(pattern, content, re.IGNORECASE))
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue
+    for js_file in target_path.rglob("*.js"):
+        if ".spec." in js_file.name or ".test." in js_file.name:
+            continue
+        try:
+            content = js_file.read_text(encoding="utf-8", errors="replace")
+            for pattern in ts_patterns:
+                count += len(re.findall(pattern, content, re.IGNORECASE))
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue
     return count
 
 
@@ -978,7 +1027,7 @@ def _detect_modules(target_path: Path | None = None) -> list[str]:
         # Look for Python and TypeScript modules in target
         modules = []
 
-        # Check for common TypeScript project structures
+        # Check for common TypeScript/Node project structures (Nx, etc.)
         for struct in ["apps", "libs", "src"]:
             struct_path = target_path / struct
             if struct_path.exists() and struct_path.is_dir():
@@ -986,16 +1035,27 @@ def _detect_modules(target_path: Path | None = None) -> list[str]:
                     if item.is_dir() and not item.name.startswith(("_", ".")):
                         modules.append(f"{struct}/{item.name}")
 
-        # Also check root level directories
+        # Prisma (schema/migrations) as a first-class module
+        if (target_path / "prisma").is_dir():
+            modules.append("prisma")
+
+        # Root-level dirs that contain code (e.g. tools); skip expanded structs and non-code dirs
+        skip_root = {"node_modules", "dist", "build", "test", "tests", "docker", "data", ".git", ".config", ".husky", ".vscode", "apps", "libs", "src"}
         for item in target_path.iterdir():
-            if item.is_dir() and not item.name.startswith(("_", ".")) and item.name not in ("pycache", "pycache__", "__pycache__"):
-                # Skip common non-module directories
-                if item.name in {"node_modules", "dist", "build", "test", "tests", "docker", "prisma", "tools", "data"}:
-                    continue
-                # Check if it has Python or TypeScript code
-                has_code = (item / "__init__.py").exists() or any(item.rglob("*.py")) or any(item.rglob("*.ts"))
-                if has_code and not any(item.name in m for m in modules):
-                    modules.append(item.name)
+            if not item.is_dir() or item.name.startswith(("_", ".")) or item.name == "__pycache__":
+                continue
+            if item.name in skip_root or item.name == "prisma":
+                continue
+            has_code = (
+                (item / "__init__.py").exists()
+                or any(item.rglob("*.py"))
+                or any(item.rglob("*.ts"))
+                or any(item.rglob("*.tsx"))
+                or any(item.rglob("*.js"))
+                or (item / "schema.prisma").exists()
+            )
+            if has_code and not any(m == item.name or m.endswith(f"/{item.name}") for m in modules):
+                modules.append(item.name)
 
         return sorted(modules) if modules else ["(root)"]
     else:
@@ -1004,7 +1064,7 @@ def _detect_modules(target_path: Path | None = None) -> list[str]:
         modules = []
         if src_dir.exists():
             for item in src_dir.iterdir():
-                if item.is_dir() and not item.name.startswith("_") and not item.name == "pycache":
+                if item.is_dir() and not item.name.startswith("_") and item.name != "__pycache__":
                     modules.append(item.name)
         return sorted(modules)
 
@@ -1107,7 +1167,7 @@ def _analyze_module_dependencies(target_path: Path, module_name: str) -> tuple[l
 
     # Add subdirectories as submodules
     for item in module_path.iterdir():
-        if item.is_dir() and not item.name.startswith("_") and item.name != "pycache__":
+        if item.is_dir() and not item.name.startswith("_") and item.name != "__pycache__":
             if (item / "__init__.py").exists() or any(item.rglob("*.py")):
                 submodules[item.name] = item
 
@@ -1224,13 +1284,30 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
     # Detect actual modules
     modules = _detect_modules(target_path=target_path)
 
-    # Analyze imports for each module
+    # Analyze imports for each module (Python and TypeScript/JavaScript)
     module_imports: dict[str, set[str]] = defaultdict(set)
     for module in modules:
         module_dir = src_dir / module
-        if module_dir.exists():
-            for py_file in module_dir.rglob("*.py"):
-                imports = _analyze_python_imports(py_file, target_path=target_path, known_modules=modules)
+        if not module_dir.exists():
+            continue
+        for py_file in module_dir.rglob("*.py"):
+            imports = _analyze_python_imports(py_file, target_path=target_path, known_modules=modules)
+            module_imports[module].update(imports)
+        if target_path:
+            for ts_file in module_dir.rglob("*.ts"):
+                if ".spec." in ts_file.name or ".test." in ts_file.name:
+                    continue
+                imports = _analyze_ts_imports(ts_file, repo_root, modules)
+                module_imports[module].update(imports)
+            for tsx_file in module_dir.rglob("*.tsx"):
+                if ".spec." in tsx_file.name or ".test." in tsx_file.name:
+                    continue
+                imports = _analyze_ts_imports(tsx_file, repo_root, modules)
+                module_imports[module].update(imports)
+            for js_file in module_dir.rglob("*.js"):
+                if ".spec." in js_file.name or ".test." in js_file.name:
+                    continue
+                imports = _analyze_ts_imports(js_file, repo_root, modules)
                 module_imports[module].update(imports)
 
     # Module display configuration
@@ -1262,16 +1339,19 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
             color="emerald",
         ))
 
+    def _mid(m: str) -> str:
+        return f"module-{m.replace('/', '-').replace(chr(92), '-')}"
+
     # Add nodes for detected modules
     for module in modules:
         config = module_config.get(module, {
-            "name": module.replace("_", " ").title(),
+            "name": module.split("/")[-1].split("\\")[-1].replace("_", " ").title(),
             "type": "service",
             "icon": "extension",
             "color": "indigo"
         })
         nodes.append(DependencyNode(
-            id=f"module-{module}",
+            id=_mid(module),
             name=config["name"],
             type=config["type"],
             icon=config["icon"],
@@ -1281,11 +1361,10 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
     # Build edges from actual import analysis
     for module, imports in module_imports.items():
         for imported in imports:
-            # Only create edges for modules that exist
             if imported in modules and imported != module:
                 edges.append(DependencyEdge(
-                    source=f"module-{module}",
-                    target=f"module-{imported}",
+                    source=_mid(module),
+                    target=_mid(imported),
                 ))
 
     # Add agent core connections (only for ghostfolio-agent)
@@ -1344,6 +1423,9 @@ async def get_module_dependencies(repo_id: str, module_name: str) -> Dependencie
 
     if not repo_path:
         raise _repo_not_found(repo_id)
+
+    if ".." in module_name or "/" in module_name or "\\" in module_name:
+        raise HTTPException(status_code=400, detail="Invalid module name")
 
     nodes, edges = _analyze_module_dependencies(repo_path, module_name)
     return DependenciesResponse(nodes=nodes, edges=edges)
@@ -1460,13 +1542,27 @@ async def get_injection_points(repo_id: str, limit: int = 10) -> InjectionPoints
         raise _repo_not_found(repo_id)
 
     points = []
-    route_patterns = [
+    py_patterns = [
         (r"@app\.(get|post|put|delete|patch)\s*\(\s*['\"]([^'\"]+)['\"]", "fastapi"),
         (r"@router\.(get|post|put|delete|patch)\s*\(\s*['\"]([^'\"]+)['\"]", "fastapi"),
         (r"@app\.route\s*\(\s*['\"]([^'\"]+)['\"]", "flask"),
     ]
+    ts_patterns = [
+        (r"@(Get|Post|Put|Delete|Patch)\s*\(\s*['\"`]?([^'\"`)]*)['\"`]?\s*\)", "nestjs"),
+        (r"\.(get|post|put|delete|patch)\s*\(\s*['\"`]([^'\"`]+)['\"`]", "express"),
+        (r"app\.(get|post|put|delete|patch)\s*\(\s*['\"`]([^'\"`]+)['\"`]", "express"),
+    ]
 
-    import re
+    def add_point(rel_path: str, line_number: int, lines: list[str], route_type: str, route_path: str, i: int) -> None:
+        start = max(0, i - 2)
+        end = min(len(lines), i + 8)
+        points.append(InjectionPoint(
+            file_path=rel_path,
+            line_number=line_number,
+            code_snippet=lines[start:end],
+            route_type=route_type.upper(),
+            route_path=route_path or "/",
+        ))
 
     for py_file in repo_path.rglob("*.py"):
         if len(points) >= limit:
@@ -1475,26 +1571,34 @@ async def get_injection_points(repo_id: str, limit: int = 10) -> InjectionPoints
             content = py_file.read_text(encoding="utf-8")
             lines = content.split("\n")
             rel_path = str(py_file.relative_to(repo_path))
-
             for i, line in enumerate(lines):
-                for pattern, framework in route_patterns:
+                for pattern, _ in py_patterns:
                     match = re.search(pattern, line, re.IGNORECASE)
                     if match:
-                        route_type = match.group(1).upper() if len(match.groups()) > 1 else "GET"
-                        route_path = match.group(2) if len(match.groups()) > 1 else match.group(1)
+                        route_type = match.group(1).upper()
+                        route_path = match.group(2) if match.lastindex >= 2 else "/"
+                        add_point(rel_path, i + 1, lines, route_type, route_path, i)
+                        if len(points) >= limit:
+                            break
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue
 
-                        # Get surrounding context
-                        start = max(0, i - 2)
-                        end = min(len(lines), i + 8)
-                        snippet = lines[start:end]
-
-                        points.append(InjectionPoint(
-                            file_path=rel_path,
-                            line_number=i + 1,
-                            code_snippet=snippet,
-                            route_type=route_type,
-                            route_path=route_path,
-                        ))
+    for ts_file in repo_path.rglob("*.ts"):
+        if len(points) >= limit:
+            break
+        if ".spec." in ts_file.name or ".test." in ts_file.name:
+            continue
+        try:
+            content = ts_file.read_text(encoding="utf-8", errors="replace")
+            lines = content.split("\n")
+            rel_path = str(ts_file.relative_to(repo_path))
+            for i, line in enumerate(lines):
+                for pattern, _ in ts_patterns:
+                    match = re.search(pattern, line, re.IGNORECASE)
+                    if match:
+                        route_type = (match.group(1) or "GET").upper()
+                        route_path = match.group(2) if match.lastindex >= 2 and match.group(2) else "/"
+                        add_point(rel_path, i + 1, lines, route_type, route_path, i)
                         if len(points) >= limit:
                             break
         except (UnicodeDecodeError, FileNotFoundError):
@@ -1529,7 +1633,23 @@ async def get_codebase_insights(repo_id: str) -> CodebaseInsight:
     modules = _detect_modules(target_path=repo_path)
     endpoints = _count_endpoints_in_path(repo_path)
 
-    # Detect framework/architecture
+    # Detect framework from package.json (Node/TypeScript repos)
+    has_nx = False
+    has_angular = False
+    has_nest = False
+    pkg_path = repo_path / "package.json"
+    if pkg_path.exists():
+        try:
+            import json
+            pkg = json.loads(pkg_path.read_text(encoding="utf-8", errors="replace"))
+            deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+            has_nx = "nx" in deps or (pkg.get("name") == "ghostfolio")
+            has_angular = any("angular" in k.lower() for k in deps)
+            has_nest = any("nestjs" in k.lower() or "nest-" in k.lower() for k in deps)
+        except Exception:
+            pass
+
+    # Detect framework/architecture (Python)
     has_fastapi = (repo_path / "fastapi").is_dir() or any(
         "fastapi" in f.read_text(encoding="utf-8", errors="ignore").lower()
         for f in repo_path.rglob("*.py")
@@ -1537,7 +1657,18 @@ async def get_codebase_insights(repo_id: str) -> CodebaseInsight:
     ) if repo_path.exists() else False
 
     # Generate insights based on analysis
-    if has_fastapi or "fastapi" in repo_name.lower():
+    if has_nx or has_angular:
+        architecture = "Nx Monorepo (Angular + Node)"
+        if has_nest:
+            architecture = "Nx Monorepo (Angular + NestJS API)"
+        entry_points = [m for m in modules if "api" in m.lower() or "server" in m.lower()][:5] or modules[:5] or ["(root)"]
+        summary = f"Nx/TypeScript repo with {len(modules)} apps/libs, {endpoints} detected endpoints. Frontend (Angular) and API (NestJS/Node) structure."
+        recommendations = [
+            "Integrate agent via API app: add a new NestJS module or controller for agent endpoints",
+            "Use Nx libs for shared agent client or types",
+            "Consider server-side agent in apps/api and client calls from Angular apps/client",
+        ]
+    elif has_fastapi or "fastapi" in repo_name.lower():
         architecture = "FastAPI Async Web Framework"
         entry_points = ["fastapi/applications.py", "fastapi/routing.py"]
         summary = f"FastAPI is a modern async web framework with {endpoints} detected routes and {len(modules)} modules."
@@ -1547,8 +1678,8 @@ async def get_codebase_insights(repo_id: str) -> CodebaseInsight:
             "Use dependency injection for agent service integration",
         ]
     else:
-        architecture = "Python Package" if any(repo_path.rglob("*.py")) else "Unknown"
-        entry_points = modules[:3] if modules else ["(root)"]
+        architecture = "Python Package" if any(repo_path.rglob("*.py")) else ("Node/TypeScript" if any(repo_path.rglob("*.ts")) else "Unknown")
+        entry_points = modules[:5] if modules else ["(root)"]
         summary = f"Repository with {len(modules)} modules and {endpoints} detected endpoints."
         recommendations = [
             "Analyze entry points for agent integration opportunities",

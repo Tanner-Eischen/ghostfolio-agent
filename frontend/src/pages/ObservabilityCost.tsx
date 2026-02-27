@@ -147,9 +147,9 @@ export function ObservabilityCost() {
   };
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full min-h-0">
       {/* Trace List Sidebar */}
-      <aside className="w-72 bg-surface-darker border-r border-surface-border flex flex-col h-full">
+      <aside className="w-72 min-h-0 bg-surface-darker border-r border-surface-border flex flex-col h-full">
         <div className="p-4 border-b border-surface-border">
           <h2 className="text-white font-bold mb-3 flex items-center gap-2">
             <span className="material-symbols-outlined text-primary">monitoring</span>
@@ -167,7 +167,7 @@ export function ObservabilityCost() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           {tracesLoading ? (
             <div className="p-4 text-center text-text-dim">Loading traces...</div>
           ) : tracesError ? (
@@ -233,7 +233,7 @@ export function ObservabilityCost() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col h-full bg-background-dark overflow-hidden">
+      <main className="flex-1 flex flex-col min-h-0 h-full bg-background-dark overflow-hidden">
         {/* Header with combined metrics */}
         <header className="sticky top-0 z-10 bg-background-dark/95 backdrop-blur-sm border-b border-surface-border px-6 py-4">
           <div className="flex items-center justify-between mb-4">
@@ -286,7 +286,7 @@ export function ObservabilityCost() {
         </header>
 
         {/* Split Content Area */}
-        <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 min-h-0 overflow-hidden flex">
           {/* Left: Trace Detail */}
           <div className="flex-1 overflow-y-auto p-6 border-r border-surface-border">
             {detailLoading ? (
