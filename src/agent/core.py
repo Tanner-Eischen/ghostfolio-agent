@@ -12,7 +12,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langsmith import traceable
 
@@ -333,7 +333,6 @@ class GhostfolioAgent:
                         )
 
             # Extract ALL tool calls from all messages (not just final response)
-            from langchain_core.messages import ToolMessage
             for msg in response_messages:
                 # Check for tool calls in AIMessage
                 if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
@@ -383,11 +382,17 @@ class GhostfolioAgent:
             verification_end_time = time.time()
             timing_breakdown["verification_time_ms"] = round((verification_end_time - verification_start_time) * 1000, 2)
 
-            # Update history
+            # Update history - store all messages including tool calls and responses
+            # to avoid OpenAI error about tool_call_ids without responses
             if session_id not in self._conversation_history:
                 self._conversation_history[session_id] = []
             self._conversation_history[session_id].append(user_message)
-            self._conversation_history[session_id].append(AIMessage(content=response_text))
+            
+            # Store all response messages (AIMessage with tool_calls, ToolMessages, final AIMessage)
+            # This preserves the tool_call_id -> ToolMessage pairing that OpenAI requires
+            for msg in response_messages:
+                if isinstance(msg, (AIMessage, ToolMessage)):
+                    self._conversation_history[session_id].append(msg)
 
             processing_time = time.time() - start_time
 
