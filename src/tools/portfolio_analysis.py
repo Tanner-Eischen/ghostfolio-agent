@@ -170,7 +170,7 @@ async def portfolio_analysis(
 
     logger.info(f"Analyzing portfolio (account_id={account_id}, timeframe={timeframe})")
 
-    async with GhostfolioClient(use_mock=True) as client:
+    async with GhostfolioClient() as client:
         try:
             # Fetch portfolio data
             portfolio_data = await client.get_portfolio()

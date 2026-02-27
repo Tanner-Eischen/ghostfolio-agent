@@ -11,6 +11,7 @@ Task #15: Create FastAPI backend
 """
 
 import ast
+import json
 import re
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -103,6 +104,24 @@ async def lifespan(app: FastAPI):
             logger.info("Git is available for repository cloning")
     except Exception as e:
         logger.warning("Could not check Git at startup: %s", e)
+
+    # Production: auto-connect to REPO_URL if set and no connections exist
+    repo_url = (settings.repo_url or "").strip()
+    if repo_url and repo_url.startswith("http"):
+        try:
+            manager = get_repo_manager()
+            if len(manager.list_connections()) == 0:
+                req = RepoConnectionRequest(
+                    source=repo_url,
+                    branch=(settings.repo_branch or "main").strip() or None,
+                )
+                resp = await manager.connect(req)
+                if resp.success and resp.connection:
+                    logger.info("Auto-connected to production repo: %s", resp.connection.name)
+                else:
+                    logger.warning("Auto-connect to REPO_URL failed: %s", getattr(resp, "error", "unknown"))
+        except Exception as e:
+            logger.warning("Auto-connect to REPO_URL failed: %s", e)
 
     yield
 
@@ -591,6 +610,10 @@ class DependencyNode(BaseModel):
     type: str = Field(..., description="Node type: agent, service, database, api")
     icon: str = Field(..., description="Material icon name")
     color: str = Field(..., description="Color theme: primary, indigo, emerald, slate")
+    file_count: int = Field(default=0, description="Number of source files in this module")
+    line_count: int = Field(default=0, description="Total lines of code")
+    external_deps: list[str] = Field(default_factory=list, description="External npm/pip packages used")
+    has_circular: bool = Field(default=False, description="Whether this module is in a circular dependency")
 
 
 class DependencyEdge(BaseModel):
@@ -599,6 +622,8 @@ class DependencyEdge(BaseModel):
     source: str = Field(..., description="Source node ID")
     target: str = Field(..., description="Target node ID")
     label: str | None = Field(default=None, description="Optional edge label")
+    weight: int = Field(default=1, description="Number of import statements between modules")
+    import_types: list[str] = Field(default_factory=list, description="Types of imports (e.g. services, types)")
 
 
 class DependenciesResponse(BaseModel):
@@ -711,6 +736,12 @@ async def get_repo_info() -> RepoInfoResponse:
     # Try to get repo info from environment variables first
     repo_name = settings.repo_name
     repo_branch = settings.repo_branch
+    if not repo_name and settings.repo_url:
+        # Derive owner/repo from URL (e.g. https://github.com/Tanner-Eischen/ghostfolio -> Tanner-Eischen/ghostfolio)
+        url = (settings.repo_url or "").strip().rstrip("/").replace(".git", "")
+        parts = [p for p in url.split("/") if p]
+        if len(parts) >= 2:
+            repo_name = f"{parts[-2]}/{parts[-1]}"
 
     # Fallback to git commands if not set
     if not repo_name or not repo_branch:
@@ -904,14 +935,55 @@ def _analyze_python_imports(file_path: Path, target_path: Path | None = None, kn
     return imports
 
 
+def _load_ts_path_aliases(repo_root: Path) -> dict[str, str]:
+    """Load path aliases from tsconfig.base.json or tsconfig.json.
+
+    Converts compilerOptions.paths like \"@ghostfolio/common/*\" -> [\"libs/common/src/lib/*\"]
+    into alias -> module mapping: \"@ghostfolio/common\" -> \"libs/common\".
+    """
+    result: dict[str, str] = {}
+    for tsconfig_name in ["tsconfig.base.json", "tsconfig.json"]:
+        tsconfig_path = repo_root / tsconfig_name
+        if not tsconfig_path.exists():
+            continue
+        try:
+            config = json.loads(tsconfig_path.read_text(encoding="utf-8", errors="replace"))
+            paths = config.get("compilerOptions", {}).get("paths", {}) or {}
+            for alias_pattern, targets in paths.items():
+                if not isinstance(targets, list) or not targets:
+                    continue
+                # "@ghostfolio/common/*" -> "@ghostfolio/common"
+                alias = alias_pattern.rstrip("/*")
+                if alias.startswith("@"):
+                    # First target: "libs/common/src/lib/*" -> "libs/common"
+                    target = targets[0]
+                    if isinstance(target, str) and "*" in target:
+                        module_part = target.split("*")[0].rstrip("/").replace("\\", "/")
+                        # "libs/common/src/lib" -> take first two segments as "libs/common"
+                        parts = module_part.split("/")
+                        if len(parts) >= 2:
+                            result[alias] = f"{parts[0]}/{parts[1]}"
+                        elif len(parts) == 1:
+                            result[alias] = parts[0]
+                    elif isinstance(target, str):
+                        result[alias] = target.split("/")[0]
+            if result:
+                break
+        except (json.JSONDecodeError, OSError):
+            continue
+    return result
+
+
 def _analyze_ts_imports(
-    file_path: Path, repo_root: Path, modules: list[str]
+    file_path: Path, repo_root: Path, modules: list[str], path_aliases: dict[str, str] | None = None
 ) -> set[str]:
     """Extract internal module imports from a TypeScript/JavaScript file via regex.
 
     Matches: import X from '@scope/name', from \"@scope/name\", from '../libs/name',
-    require('@scope/name'). Maps to module names (e.g. apps/api, libs/domain) by stem.
+    require('@scope/name'). Uses tsconfig path aliases when available (e.g. @ghostfolio/common).
     """
+    if path_aliases is None:
+        path_aliases = _load_ts_path_aliases(repo_root)
     try:
         content = file_path.read_text(encoding="utf-8", errors="replace")
     except (FileNotFoundError, UnicodeDecodeError):
@@ -921,6 +993,11 @@ def _analyze_ts_imports(
     for mod in modules:
         stem = mod.split("/")[-1].split("\\")[-1]
         stem_to_modules[stem].append(mod)
+    # Alias -> module from tsconfig (e.g. "@ghostfolio/common" -> "libs/common")
+    alias_to_module: dict[str, str] = {}
+    for alias, resolved in path_aliases.items():
+        if resolved in modules:
+            alias_to_module[alias] = resolved
     imports: set[str] = set()
     # from '@scope/name' or from \"@scope/name\" or from '../path/name'
     for m in re.finditer(
@@ -930,12 +1007,65 @@ def _analyze_ts_imports(
         path = (m.group(1) or m.group(2) or "").strip()
         if not path:
             continue
-        # Last segment as stem: @ghostfolio/domain -> domain, ../libs/domain -> domain
-        stem = path.replace("\\", "/").split("/")[-1].split("@")[-1]
-        if stem in stem_to_modules:
-            for mod in stem_to_modules[stem]:
+        # Resolve path aliases: @ghostfolio/common/foo -> libs/common
+        path_normalized = path.replace("\\", "/")
+        for alias, mod in alias_to_module.items():
+            if path_normalized == alias or path_normalized.startswith(alias + "/"):
                 imports.add(mod)
+                break
+        else:
+            # Fallback: last segment as stem (../libs/domain -> domain)
+            stem = path_normalized.split("/")[-1].split("@")[-1]
+            if stem in stem_to_modules:
+                for mod in stem_to_modules[stem]:
+                    imports.add(mod)
     return imports
+
+
+def _extract_external_deps_python(content: str, known_modules: list[str]) -> set[str]:
+    """Extract top-level external package names from Python source (e.g. fastapi, pydantic)."""
+    external: set[str] = set()
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return external
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top and not any(top == m.split("/")[0].split("\\")[0] for m in known_modules):
+                    external.add(top)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                top = node.module.split(".")[0]
+                if top and not any(top == m.split("/")[0].split("\\")[0] for m in known_modules):
+                    external.add(top)
+    return external
+
+
+def _extract_external_deps_ts(content: str, path_aliases: dict[str, str], modules: list[str]) -> set[str]:
+    """Extract external npm package names from TypeScript/JS source."""
+    external: set[str] = set()
+    alias_prefixes = {a for a in path_aliases}
+    for m in re.finditer(
+        r"""(?:from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\))""",
+        content,
+    ):
+        path = (m.group(1) or m.group(2) or "").strip().replace("\\", "/")
+        if not path or path.startswith("."):
+            continue
+        if any(path == a or path.startswith(a + "/") for a in alias_prefixes):
+            continue
+        # First segment is package name (e.g. @angular/core -> @angular/core, lodash -> lodash)
+        if path.startswith("@"):
+            parts = path.split("/")
+            if len(parts) >= 2:
+                external.add(f"{parts[0]}/{parts[1]}")
+            elif len(parts) == 1:
+                external.add(parts[0])
+        else:
+            external.add(path.split("/")[0])
+    return external
 
 
 def _count_fastapi_endpoints() -> int:
@@ -1262,6 +1392,59 @@ def _analyze_submodule_imports(file_path: Path, module_name: str, known_submodul
     return imports
 
 
+def _find_nodes_in_cycles(edges: list[DependencyEdge]) -> set[str]:
+    """Find all node IDs that participate in at least one cycle (Tarjan's SCC).
+
+    Returns:
+        Set of node ids that are in a strongly connected component of size > 1.
+    """
+    if not edges:
+        return set()
+    # Build adjacency list
+    adj: dict[str, list[str]] = defaultdict(list)
+    for e in edges:
+        adj[e.source].append(e.target)
+    all_nodes = set(adj) | {e.target for e in edges}
+    index_counter = [0]
+    stack: list[str] = []
+    lowlink: dict[str, int] = {}
+    index: dict[str, int] = {}
+    on_stack: dict[str, bool] = defaultdict(bool)
+    sccs: list[set[str]] = []
+
+    def strongconnect(v: str) -> None:
+        index[v] = index_counter[0]
+        lowlink[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack[v] = True
+        for w in adj.get(v, []):
+            if w not in index:
+                strongconnect(w)
+                lowlink[v] = min(lowlink[v], lowlink[w])
+            elif on_stack[w]:
+                lowlink[v] = min(lowlink[v], index[w])
+        if lowlink[v] == index[v]:
+            scc: set[str] = set()
+            while True:
+                w = stack.pop()
+                on_stack[w] = False
+                scc.add(w)
+                if w == v:
+                    break
+            sccs.append(scc)
+
+    for node in all_nodes:
+        if node not in index:
+            strongconnect(node)
+
+    in_cycle: set[str] = set()
+    for scc in sccs:
+        if len(scc) > 1:
+            in_cycle |= scc
+    return in_cycle
+
+
 def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[DependencyNode], list[DependencyEdge]]:
     """Analyze the repository structure and build dependency graph from actual imports.
 
@@ -1283,32 +1466,80 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
 
     # Detect actual modules
     modules = _detect_modules(target_path=target_path)
+    path_aliases = _load_ts_path_aliases(repo_root) if target_path else {}
 
-    # Analyze imports for each module (Python and TypeScript/JavaScript)
+    # Analyze imports and collect per-module stats and edge weights
     module_imports: dict[str, set[str]] = defaultdict(set)
+    module_file_count: dict[str, int] = defaultdict(int)
+    module_line_count: dict[str, int] = defaultdict(int)
+    module_external_deps: dict[str, set[str]] = defaultdict(set)
+    edge_weights: dict[tuple[str, str], int] = defaultdict(int)
+
     for module in modules:
         module_dir = src_dir / module
         if not module_dir.exists():
             continue
         for py_file in module_dir.rglob("*.py"):
-            imports = _analyze_python_imports(py_file, target_path=target_path, known_modules=modules)
-            module_imports[module].update(imports)
+            module_file_count[module] += 1
+            try:
+                content = py_file.read_text(encoding="utf-8", errors="replace")
+                module_line_count[module] += len(content.splitlines())
+                imports = _analyze_python_imports(py_file, target_path=target_path, known_modules=modules)
+                module_imports[module].update(imports)
+                for imp in imports:
+                    edge_weights[(module, imp)] += 1
+                module_external_deps[module].update(_extract_external_deps_python(content, modules))
+            except (FileNotFoundError, UnicodeDecodeError):
+                pass
         if target_path:
             for ts_file in module_dir.rglob("*.ts"):
                 if ".spec." in ts_file.name or ".test." in ts_file.name:
                     continue
-                imports = _analyze_ts_imports(ts_file, repo_root, modules)
-                module_imports[module].update(imports)
+                module_file_count[module] += 1
+                try:
+                    content = ts_file.read_text(encoding="utf-8", errors="replace")
+                    module_line_count[module] += len(content.splitlines())
+                    imports = _analyze_ts_imports(ts_file, repo_root, modules, path_aliases)
+                    module_imports[module].update(imports)
+                    for imp in imports:
+                        edge_weights[(module, imp)] += 1
+                    module_external_deps[module].update(
+                        _extract_external_deps_ts(content, path_aliases, modules)
+                    )
+                except (FileNotFoundError, UnicodeDecodeError):
+                    pass
             for tsx_file in module_dir.rglob("*.tsx"):
                 if ".spec." in tsx_file.name or ".test." in tsx_file.name:
                     continue
-                imports = _analyze_ts_imports(tsx_file, repo_root, modules)
-                module_imports[module].update(imports)
+                module_file_count[module] += 1
+                try:
+                    content = tsx_file.read_text(encoding="utf-8", errors="replace")
+                    module_line_count[module] += len(content.splitlines())
+                    imports = _analyze_ts_imports(tsx_file, repo_root, modules, path_aliases)
+                    module_imports[module].update(imports)
+                    for imp in imports:
+                        edge_weights[(module, imp)] += 1
+                    module_external_deps[module].update(
+                        _extract_external_deps_ts(content, path_aliases, modules)
+                    )
+                except (FileNotFoundError, UnicodeDecodeError):
+                    pass
             for js_file in module_dir.rglob("*.js"):
                 if ".spec." in js_file.name or ".test." in js_file.name:
                     continue
-                imports = _analyze_ts_imports(js_file, repo_root, modules)
-                module_imports[module].update(imports)
+                module_file_count[module] += 1
+                try:
+                    content = js_file.read_text(encoding="utf-8", errors="replace")
+                    module_line_count[module] += len(content.splitlines())
+                    imports = _analyze_ts_imports(js_file, repo_root, modules, path_aliases)
+                    module_imports[module].update(imports)
+                    for imp in imports:
+                        edge_weights[(module, imp)] += 1
+                    module_external_deps[module].update(
+                        _extract_external_deps_ts(content, path_aliases, modules)
+                    )
+                except (FileNotFoundError, UnicodeDecodeError):
+                    pass
 
     # Module display configuration
     module_config = {
@@ -1342,7 +1573,7 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
     def _mid(m: str) -> str:
         return f"module-{m.replace('/', '-').replace(chr(92), '-')}"
 
-    # Add nodes for detected modules
+    # Add nodes for detected modules (has_circular set later after cycle detection)
     for module in modules:
         config = module_config.get(module, {
             "name": module.split("/")[-1].split("\\")[-1].replace("_", " ").title(),
@@ -1356,15 +1587,22 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
             type=config["type"],
             icon=config["icon"],
             color=config["color"],
+            file_count=module_file_count.get(module, 0),
+            line_count=module_line_count.get(module, 0),
+            external_deps=sorted(module_external_deps.get(module, set())),
+            has_circular=False,
         ))
 
-    # Build edges from actual import analysis
+    # Build edges from actual import analysis (with weight = number of files importing)
     for module, imports in module_imports.items():
         for imported in imports:
             if imported in modules and imported != module:
+                weight = edge_weights.get((module, imported), 1)
                 edges.append(DependencyEdge(
                     source=_mid(module),
                     target=_mid(imported),
+                    weight=weight,
+                    import_types=[],
                 ))
 
     # Add agent core connections (only for ghostfolio-agent)
@@ -1375,11 +1613,17 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
 
         # Agent core uses tools
         if "tools" in modules:
-            edges.append(DependencyEdge(source="agent-core", target="module-tools", label="invokes"))
+            edges.append(DependencyEdge(source="agent-core", target="module-tools", label="invokes", weight=1, import_types=[]))
 
         # Agent core uses verification
         if "verification" in modules:
-            edges.append(DependencyEdge(source="agent-core", target="module-verification", label="verifies"))
+            edges.append(DependencyEdge(source="agent-core", target="module-verification", label="verifies", weight=1, import_types=[]))
+
+    # Mark nodes that participate in circular dependencies
+    cycle_node_ids = _find_nodes_in_cycles(edges)
+    for i, node in enumerate(nodes):
+        if node.id in cycle_node_ids:
+            nodes[i] = node.model_copy(update={"has_circular": True})
 
     return nodes, edges
 

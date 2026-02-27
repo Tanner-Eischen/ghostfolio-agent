@@ -291,7 +291,7 @@ async def transaction_categorize(
         f"Categorizing transactions (account={account_id}, start={start_date}, end={end_date})"
     )
 
-    async with GhostfolioClient(use_mock=True) as client:
+    async with GhostfolioClient() as client:
         try:
             # Fetch orders with filters
             orders = await client.get_orders(

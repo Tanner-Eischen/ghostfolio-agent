@@ -480,7 +480,7 @@ async def compliance_check(
     all_warnings: list[str] = []
     all_recommendations: list[str] = []
 
-    async with GhostfolioClient(use_mock=True) as client:
+    async with GhostfolioClient() as client:
         try:
             # Fetch necessary data
             orders = await client.get_orders(account_id=account_id, symbol=symbol)

@@ -355,7 +355,7 @@ async def risk_assessment(
     """
     logger.info("Starting risk assessment")
 
-    async with GhostfolioClient(use_mock=True) as client:
+    async with GhostfolioClient() as client:
         try:
             # Get portfolio data either from input or from API
             if portfolio_data:

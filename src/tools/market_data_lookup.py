@@ -240,7 +240,7 @@ async def market_data_lookup(
     # Fetch crypto data from CoinGecko
     if crypto_symbols:
         try:
-            async with CoinGeckoClient(use_mock=True) as client:
+            async with CoinGeckoClient() as client:
                 # Convert symbols to coin ids
                 coin_ids = [SYMBOL_TO_ID.get(s, s.lower()) for s in crypto_symbols]
 
@@ -285,7 +285,7 @@ async def market_data_lookup(
     # Fetch stock data from Yahoo Finance
     if stock_symbols:
         try:
-            async with YahooFinanceClient(use_mock=True) as client:
+            async with YahooFinanceClient() as client:
                 quotes = await client.get_quote(stock_symbols)
 
                 for quote in quotes:
