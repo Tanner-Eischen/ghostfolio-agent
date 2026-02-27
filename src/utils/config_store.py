@@ -10,6 +10,7 @@ Used by:
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +18,31 @@ from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def _get_config_dir() -> Path:
+    """Get config directory, creating it if possible."""
+    # Check for environment variable first (for production)
+    config_dir_env = os.environ.get("DATA_DIR", os.environ.get("RAILWAY_DATA_DIR"))
+    if config_dir_env:
+        config_dir = Path(config_dir_env)
+    else:
+        # Default to ./data relative to project root
+        config_dir = Path(__file__).parent.parent.parent / "data"
+
+    # Try to create the directory, fall back to /tmp if permission denied
+    try:
+        config_dir.mkdir(exist_ok=True, parents=True)
+        return config_dir
+    except PermissionError:
+        # In production containers, fall back to /tmp
+        fallback = Path("/tmp/ghostfolio-agent-data")
+        fallback.mkdir(exist_ok=True, parents=True)
+        logger.warning(f"Could not create {config_dir}, using fallback: {fallback}")
+        return fallback
+
+
 # Default config directory
-CONFIG_DIR = Path(__file__).parent.parent.parent / "data"
-CONFIG_DIR.mkdir(exist_ok=True)
+CONFIG_DIR = _get_config_dir()
 
 
 class ConfigStore:

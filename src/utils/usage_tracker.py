@@ -10,6 +10,7 @@ Pricing (as of 2024):
 """
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,29 @@ from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Usage data directory
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# Usage data directory - use environment variable or default to /tmp in production
+def _get_data_dir() -> Path:
+    """Get data directory, creating it if possible."""
+    # Check for environment variable first (for production)
+    data_dir_env = os.environ.get("DATA_DIR", os.environ.get("RAILWAY_DATA_DIR"))
+    if data_dir_env:
+        data_dir = Path(data_dir_env)
+    else:
+        # Default to ./data relative to project root
+        data_dir = Path(__file__).parent.parent.parent / "data"
 
+    # Try to create the directory, fall back to /tmp if permission denied
+    try:
+        data_dir.mkdir(exist_ok=True, parents=True)
+        return data_dir
+    except PermissionError:
+        # In production containers, fall back to /tmp
+        fallback = Path("/tmp/ghostfolio-agent-data")
+        fallback.mkdir(exist_ok=True, parents=True)
+        logger.warning(f"Could not create {data_dir}, using fallback: {fallback}")
+        return fallback
+
+DATA_DIR = _get_data_dir()
 USAGE_LOG_FILE = DATA_DIR / "usage_log.json"
 
 

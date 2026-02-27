@@ -5,6 +5,7 @@ Provides secure cloning, path validation, and connection lifecycle management.
 """
 
 import asyncio
+import os
 import re
 import shutil
 import subprocess
@@ -21,8 +22,19 @@ from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def _get_repos_dir() -> Path:
+    """Get repos directory, creating it if possible."""
+    # Check for environment variable first (for production)
+    data_dir_env = os.environ.get("DATA_DIR", os.environ.get("RAILWAY_DATA_DIR"))
+    if data_dir_env:
+        return Path(data_dir_env) / "repos"
+    else:
+        return Path("data/repos")
+
+
 # Configuration
-REPOS_DIR = Path("data/repos")
+REPOS_DIR = _get_repos_dir()
 CLONE_TIMEOUT_SECONDS = 60
 
 # Security: Blocked protocols and patterns
@@ -79,9 +91,20 @@ class RepoManager:
     - Security: protocol blocking, path traversal protection
     """
 
-    def __init__(self, repos_dir: Path = REPOS_DIR):
+    def __init__(self, repos_dir: Path | None = None):
+        if repos_dir is None:
+            repos_dir = REPOS_DIR
         self.repos_dir = repos_dir
-        self.repos_dir.mkdir(parents=True, exist_ok=True)
+
+        # Try to create the directory, fall back to /tmp if permission denied
+        try:
+            self.repos_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            fallback = Path("/tmp/ghostfolio-agent-repos")
+            fallback.mkdir(parents=True, exist_ok=True)
+            self.repos_dir = fallback
+            logger.warning(f"Could not create {repos_dir}, using fallback: {fallback}")
+
         self._connections: dict[str, RepoConnection] = {}
 
     def _validate_source(self, source: str) -> tuple[bool, str, Optional[str]]:
