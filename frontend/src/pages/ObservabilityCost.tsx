@@ -23,6 +23,11 @@ const emptyProjections: CostProjections = {
 const CIRCLE_CIRCUMFERENCE = 251; // 2 * PI * 40 (radius)
 const PERCENT_TO_DASH = CIRCLE_CIRCUMFERENCE / 100; // 2.51
 
+// LangSmith trace URL: set VITE_LANGSMITH_BASE_URL in .env to your project URL (e.g. https://smith.langchain.com/o/.../projects/p/...)
+const LANGSMITH_BASE =
+  (import.meta as unknown as { env?: { VITE_LANGSMITH_BASE_URL?: string } }).env?.VITE_LANGSMITH_BASE_URL ??
+  'https://smith.langchain.com';
+
 export function ObservabilityCost() {
   // Traces state
   const [traces, setTraces] = useState<Trace[]>([]);
@@ -315,7 +320,14 @@ export function ObservabilityCost() {
                       {selectedTrace.status}
                     </span>
                   </div>
-                  <button className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-dim bg-surface-dark border border-surface-border rounded-lg hover:text-white transition-colors">
+                  <button
+                    onClick={() => {
+                      const url = `${LANGSMITH_BASE}/r/${selectedTrace.id}`;
+                      window.open(url, '_blank', 'noopener,noreferrer');
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-dim bg-surface-dark border border-surface-border rounded-lg hover:text-white transition-colors"
+                    aria-label="Open trace in LangSmith"
+                  >
                     <span className="material-symbols-outlined text-sm">open_in_new</span>
                     View in LangSmith
                   </button>

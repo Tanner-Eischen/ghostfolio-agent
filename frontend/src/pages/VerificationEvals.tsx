@@ -229,6 +229,9 @@ export function VerificationEvals() {
     [results]
   );
 
+  const formatCategory = (cat: string) =>
+    cat === 'All' ? 'All' : cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
   if (loading || configLoading) {
     return (
       <main className="flex-1 px-6 md:px-10 py-8 overflow-y-auto">
@@ -538,7 +541,7 @@ export function VerificationEvals() {
                         : 'bg-surface-dark text-text-dim hover:border-surface-border hover:text-white border border-transparent'
                     }`}
                   >
-                    {cat}
+                    {formatCategory(cat)}
                   </button>
                 ))}
               </div>

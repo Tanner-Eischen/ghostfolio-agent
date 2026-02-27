@@ -121,7 +121,7 @@ function ToolCallDropdown({ toolCall }: { toolCall: ToolCall }) {
           className="mt-2 ml-6 p-3 bg-surface-darker rounded-lg border border-surface-border space-y-2"
         >
           {/* Arguments */}
-          {Object.keys(toolCall.args).length > 0 && (
+          {toolCall.args && typeof toolCall.args === 'object' && Object.keys(toolCall.args).length > 0 && (
             <div>
               <span className="text-[10px] text-text-dim uppercase tracking-wider">Arguments</span>
               <pre className="mt-1 p-2 bg-background-dark rounded text-[10px] text-slate-300 overflow-x-auto">
@@ -182,6 +182,7 @@ export function AgentChat() {
   const [suggestionsSummary, setSuggestionsSummary] = useState<string>('');
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [generatedTool, setGeneratedTool] = useState<GeneratedToolResponse | null>(null);
+  const [generatingToolId, setGeneratingToolId] = useState<string | null>(null);
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
   const [toolsLoading, setToolsLoading] = useState(false);
 
@@ -476,6 +477,7 @@ export function AgentChat() {
     // Use cryptographically secure random UUID for new session
     const secureId = crypto.randomUUID();
     setSessionId(`session-${Date.now()}-${secureId.split('-')[0]}`);
+    showToast('New chat started', 'success');
   };
 
   const handleSelectConversation = (conv: Conversation) => {
@@ -876,6 +878,9 @@ export function AgentChat() {
                 <span className="material-symbols-outlined">build</span>
                 Registered tools
               </h2>
+              <p className="px-4 pt-2 text-xs text-text-dim">
+                All listed tools are available to the agent. Checkbox toggles visibility in this list.
+              </p>
               <div className="p-4">
                 {toolsLoading ? (
                   <div className="flex items-center gap-2 text-text-dim">
@@ -908,7 +913,8 @@ export function AgentChat() {
                                 });
                               }}
                               className="rounded border-surface-border text-primary focus:ring-primary"
-                              aria-label={`Enable or disable tool: ${t.name}`}
+                              title="Show or hide in this list; all registered tools are available to the agent"
+                              aria-label={`Show in list: ${t.name}`}
                             />
                             <label htmlFor={`tool-${t.id}`} className="flex-1 cursor-pointer">
                               <span className="font-medium text-white">{t.name}</span>
@@ -1000,15 +1006,31 @@ export function AgentChat() {
                               </div>
                               <button
                                 type="button"
+                                disabled={generatingToolId !== null}
                                 onClick={() => {
+                                  setGeneratingToolId(s.id);
                                   toolSuggestionsApi
                                     .generateTool(selectedRepoId!, { suggestion_id: s.id })
-                                    .then((res) => setGeneratedTool(res))
-                                    .catch(() => setGeneratedTool(null));
+                                    .then((res) => {
+                                      setGeneratedTool(res);
+                                      showToast('Tool generated', 'success');
+                                    })
+                                    .catch(() => {
+                                      setGeneratedTool(null);
+                                      showToast('Failed to generate tool', 'error');
+                                    })
+                                    .finally(() => setGeneratingToolId(null));
                                 }}
-                                className="flex-shrink-0 px-3 py-1.5 bg-primary text-surface-darker text-sm font-medium rounded-lg hover:bg-primary-hover transition-colors"
+                                className="flex-shrink-0 px-3 py-1.5 bg-primary text-surface-darker text-sm font-medium rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 min-w-[88px] justify-center"
                               >
-                                Generate
+                                {generatingToolId === s.id ? (
+                                  <>
+                                    <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                                    Generating…
+                                  </>
+                                ) : (
+                                  'Generate'
+                                )}
                               </button>
                             </div>
                           </li>

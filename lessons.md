@@ -719,6 +719,66 @@
 
 ---
 
+## 2026-02-27: Dependency Map Improvements
+
+**Summary**
+- TypeScript path alias detection: parse `tsconfig.base.json` and map `@ghostfolio/*` to `libs/common`, `apps/api`, etc., so TS imports resolve correctly in the dependency graph.
+- Backend: `DependencyNode` extended with `file_count`, `line_count`, `external_deps`, `has_circular`; `DependencyEdge` with `weight`, `import_types`. Edge weight = number of files that import; circular deps detected via Tarjan SCC.
+- Frontend: Replaced SVG dependency map with React Flow (`@xyflow/react`) + dagre layout; custom module nodes (stats, circular badge); layout modes (hierarchical, horizontal, radial); search filter; click-to-select and `ModuleDetails` side panel; edge thickness by weight, animated edges for high-weight links.
+
+**Why**
+- User requested full improvement of the dependency map: better layout, interactivity, richer data, visual polish, and correct TS path alias resolution for Ghostfolio.
+
+**What worked / what didn't**
+- **Worked**: `_load_ts_path_aliases()` parses tsconfig paths and maps alias to first two path segments; `_extract_external_deps_python/ts` for npm/pip package names; Tarjan’s algorithm for cycle detection; React Flow + dagre for auto-layout; `Node<Record<string, unknown>>` and cast in custom node to satisfy @xyflow typings.
+- **Didn’t**: `Position` from @xyflow expects a specific type; used type assertion on layouted nodes to avoid sourcePosition/targetPosition type errors.
+
+**Assumptions**
+- tsconfig path targets use `*` and first two segments (e.g. `libs/common`) match module names from `_detect_modules`. Backend remains backward-compatible (new node/edge fields have defaults).
+
+**Edge cases**
+- Empty path_aliases when no tsconfig; nodes in cycles get `has_circular=True`; external deps limited to top-level package name.
+
+**Verification**
+- `pytest tests/test_api/test_routes.py -k "repo or depend"` — 11 passed. Frontend `npm run build` — success.
+
+**Follow-ups**
+- [Optional] Force-directed layout option (e.g. d3-force or elkjs). [Optional] Edge bundling for dense graphs.
+
+---
+
+## 2026-02-27: UI/UX Fixes Across All Pages (Plan Implementation)
+
+**Summary**
+- Fixed ToolCallDropdown crash when `toolCall.args` is null/undefined (AgentChat).
+- Made warning banner dismissible with X button and persisted dismissal in localStorage (AlertBar + Layout).
+- Raised React Flow Controls z-index so zoom/fit buttons are clickable (DependencyGraph).
+- Wired "View in LangSmith" button to open trace URL in new tab; base URL from env or default (ObservabilityCost).
+- Added toast on New Chat and loading + toast on Generate buttons (AgentChat).
+- Formatted category filter labels as Title Case (VerificationEvals).
+- Removed link styling from entry points and removed duplicate warning banner (RepoAnalysis).
+- Clarified tool checkboxes with helper text and tooltip (AgentChat Tools tab).
+
+**Why**
+- Browser-agent audits found sloppy UI, non-functional buttons, crashes, and unclear behavior; plan requested durable, simple fixes.
+
+**What worked / what didn't**
+- **Worked**: Null guard `toolCall.args && typeof toolCall.args === 'object'` before `Object.keys()`. Layout reads/writes `ghostfolio-agent-alert-dismissed` in localStorage; AlertBar receives `onDismiss`. Controls use `!z-50`. LangSmith URL `${LANGSMITH_BASE}/r/${traceId}` with optional `VITE_LANGSMITH_BASE_URL`. `generatingToolId` state for Generate buttons with spinner and toasts.
+
+**Assumptions**
+- LangSmith default base opens a valid project/runs page; user can set `VITE_LANGSMITH_BASE_URL` for custom project. Tool checkboxes remain for list visibility only; backend does not yet use selectedToolIds.
+
+**Edge cases**
+- localStorage may be unavailable (try/catch in Layout). Copy session ID already had showToast; New Chat and Generate now have feedback.
+
+**Verification**
+- ReadLints on all modified files: no errors.
+
+**Follow-ups**
+- [Optional] Backend to honor tool enable/disable from selectedToolIds. [Optional] React Flow edge handle IDs if "source handle id: null" console errors persist.
+
+---
+
 # Template for Future Entries
 
 ```md
