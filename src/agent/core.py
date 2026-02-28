@@ -244,16 +244,24 @@ class GhostfolioAgent:
             "dump secrets",
             "api key",
             "credentials",
+            "execute this code",
+            "os.system",
+            "import os",
+            "rm -rf",
+            "print environment",
+            "environment variables",
         ]
         has_risky_intent = any(m in lowered for m in risky_markers)
-        has_portfolio_intent = any(t in lowered for t in ["portfolio", "holdings", "risk", "diversif"])
+        has_portfolio_intent = any(t in lowered for t in ["portfolio", "holdings", "risk", "diversif", "investments", "value", "worth"])
         if has_risky_intent and has_portfolio_intent:
-            if "portfolio value" in lowered or "portfolio worth" in lowered:
+            if "portfolio value" in lowered or "portfolio worth" in lowered or "tell me about my portfolio" in lowered:
                 safe_message = "What is my portfolio value?"
             elif "holdings" in lowered:
                 safe_message = "What are my top holdings?"
             elif "risk" in lowered or "diversif" in lowered:
                 safe_message = "Assess my portfolio risk and diversification."
+            elif "portfolio" in lowered:
+                safe_message = "Analyze my portfolio."
 
         # Build input messages
         messages: list[BaseMessage] = []

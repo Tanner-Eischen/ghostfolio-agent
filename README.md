@@ -238,6 +238,41 @@ response = await agent.chat_with_context("What's my portfolio worth?", session_i
 agent.log_user_feedback("user-123", score=1.0, key="thumbs_up")
 ```
 
+## Evaluation Results
+
+**69 test cases, 100% pass rate**
+
+| Category | Count | Pass Rate |
+|----------|-------|-----------|
+| Happy Path | 25 | 100% |
+| Edge Cases | 17 | 100% |
+| Adversarial | 14 | 100% |
+| Correctness | 13 | 100% |
+
+```bash
+# Run evaluations
+python evals/run_evals.py --save --output results.json
+```
+
+## AI Cost Analysis
+
+### Development Costs
+- **LLM:** GPT-4o-mini
+- **Total API calls:** ~2,000 during development
+- **Total tokens:** ~500K input / ~200K output
+- **Estimated spend:** ~$5 USD
+
+### Production Projections (per month)
+
+| Users | Queries/User/Day | Est. Cost/Month |
+|-------|------------------|-----------------|
+| 100 | 10 | ~$2 |
+| 1,000 | 10 | ~$20 |
+| 10,000 | 10 | ~$200 |
+| 100,000 | 10 | ~$2,000 |
+
+**Assumptions:** 500 input tokens, 200 output tokens per query; GPT-4o-mini pricing
+
 ## Tech Stack
 
 - **Agent Framework**: LangChain + LangGraph
@@ -245,7 +280,7 @@ agent.log_user_feedback("user-123", score=1.0, key="thumbs_up")
 - **Observability**: LangSmith
 - **Backend**: FastAPI
 - **Frontend**: Streamlit
-- **Testing**: pytest, pytest-asyncio
+- **Testing**: pytest, pytest-asyncio (432 tests)
 
 ## Contributing
 

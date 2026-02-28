@@ -669,5 +669,103 @@
     "expected_tool_calls": [],
     "expected_output_fields": [],
     "criteria": []
+  },
+
+  {
+    "id": "MVP-062",
+    "category": "correctness",
+    "input": "What is my total portfolio value?",
+    "description": "Correctness: total_value must be a positive number in valid range",
+    "expected_tool_calls": ["portfolio_analysis"],
+    "expected_output_fields": ["total_value"],
+    "criteria": [
+      {"id": "C1", "description": "portfolio_analysis tool was called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+      {"id": "C2", "description": "total_value field exists in output", "check_type": "field_present", "expected": "total_value"},
+      {"id": "C3", "description": "total_value is a reasonable positive number ($1 - $1B)", "check_type": "value_in_range", "expected": {"field": "total_value", "min": 1, "max": 1000000000}}
+    ]
+  },
+  {
+    "id": "MVP-063",
+    "category": "correctness",
+    "input": "What is my confidence score on this analysis?",
+    "description": "Correctness: confidence must be between 0 and 100",
+    "expected_tool_calls": [],
+    "expected_output_fields": [],
+    "criteria": [
+      {"id": "C1", "description": "Confidence score is in valid range 0-100", "check_type": "value_in_range", "expected": {"field": "confidence", "min": 0, "max": 100}}
+    ]
+  },
+  {
+    "id": "MVP-064",
+    "category": "correctness",
+    "input": "Get my portfolio holdings with their current values",
+    "description": "Correctness: holdings should be a non-empty list for valid portfolio",
+    "expected_tool_calls": ["portfolio_analysis"],
+    "expected_output_fields": ["holdings"],
+    "criteria": [
+      {"id": "C1", "description": "portfolio_analysis tool was called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+      {"id": "C2", "description": "holdings field exists in output", "check_type": "field_present", "expected": "holdings"}
+    ]
+  },
+  {
+    "id": "MVP-065",
+    "category": "correctness",
+    "input": "What is my risk assessment score?",
+    "description": "Correctness: risk score must be in valid range 0-100",
+    "expected_tool_calls": ["risk_assessment"],
+    "expected_output_fields": ["overall_risk_score"],
+    "criteria": [
+      {"id": "C1", "description": "risk_assessment tool was called", "check_type": "tool_called", "expected": "risk_assessment"},
+      {"id": "C2", "description": "overall_risk_score is in valid range 0-100", "check_type": "value_in_range", "expected": {"field": "overall_risk_score", "min": 0, "max": 100}}
+    ]
+  },
+  {
+    "id": "MVP-066",
+    "category": "correctness",
+    "input": "Analyze my portfolio diversification",
+    "description": "Correctness: overall_risk_score should be in valid range",
+    "expected_tool_calls": ["risk_assessment"],
+    "expected_output_fields": ["overall_risk_score"],
+    "criteria": [
+      {"id": "C1", "description": "risk_assessment tool was called", "check_type": "tool_called", "expected": "risk_assessment"},
+      {"id": "C2", "description": "overall_risk_score is in valid range 0-100", "check_type": "value_in_range", "expected": {"field": "overall_risk_score", "min": 0, "max": 100}}
+    ]
+  },
+  {
+    "id": "MVP-067",
+    "category": "verification",
+    "input": "What's my portfolio worth?",
+    "description": "Verification: run 4-gate verification on portfolio output",
+    "expected_tool_calls": ["portfolio_analysis"],
+    "expected_output_fields": ["total_value", "holdings"],
+    "criteria": [
+      {"id": "C1", "description": "portfolio_analysis tool was called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+      {"id": "C2", "description": "Syntactic gate passes (required fields, types)", "check_type": "verification_gate", "expected": {"gate_name": "syntactic", "output_type": "portfolio"}},
+      {"id": "C3", "description": "Economic plausibility gate passes (no negative values)", "check_type": "verification_gate", "expected": {"gate_name": "economic_plausibility", "output_type": "portfolio"}}
+    ]
+  },
+  {
+    "id": "MVP-068",
+    "category": "verification",
+    "input": "What's the current price of AAPL?",
+    "description": "Verification: run temporal gate on market data output",
+    "expected_tool_calls": ["market_data_lookup"],
+    "expected_output_fields": ["data"],
+    "criteria": [
+      {"id": "C1", "description": "market_data_lookup tool was called", "check_type": "tool_called", "expected": "market_data_lookup"},
+      {"id": "C2", "description": "Temporal gate passes (fresh data)", "check_type": "verification_gate", "expected": {"gate_name": "temporal", "output_type": "market_data"}}
+    ]
+  },
+  {
+    "id": "MVP-069",
+    "category": "verification",
+    "input": "Assess my portfolio risk",
+    "description": "Verification: full verdict with all 4 gates on risk assessment",
+    "expected_tool_calls": ["risk_assessment"],
+    "expected_output_fields": ["overall_risk_score"],
+    "criteria": [
+      {"id": "C1", "description": "risk_assessment tool was called", "check_type": "tool_called", "expected": "risk_assessment"},
+      {"id": "C2", "description": "Full verification verdict passes (min 50% confidence)", "check_type": "verification_verdict", "expected": {"output_type": "risk", "min_confidence": 0.5}}
+    ]
   }
 ]
