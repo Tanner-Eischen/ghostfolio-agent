@@ -387,12 +387,37 @@ export interface EvalCase {
   category: string;
 }
 
+export interface EvalCriterionResult {
+  id: string;
+  description: string;
+  check_type: string;
+  expected: unknown;
+  actual: unknown;
+  passed: boolean;
+  error?: string;
+}
+
+export interface ToolCallDetail {
+  tool: string;
+  input?: Record<string, unknown>;
+  output?: unknown;
+}
+
 export interface EvalResult {
   case_id: string;
+  category: string;
   passed: boolean;
   score: number;
   duration_ms: number;
   error?: string;
+  // Full details for expandable UI
+  input?: string;
+  response?: string;
+  tool_calls?: string[];
+  tool_call_details?: ToolCallDetail[];
+  tool_outputs?: unknown[];
+  confidence?: number;
+  criteria_results?: EvalCriterionResult[];
 }
 
 export interface EvalSummary {

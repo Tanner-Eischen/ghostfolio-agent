@@ -103,7 +103,7 @@ def format_results_for_api(results: dict[str, Any]) -> dict[str, Any]:
         results: Raw results from the eval runner
 
     Returns:
-        Formatted results matching the API response model
+        Formatted results matching the API response model with full details
     """
     if not results:
         return {
@@ -121,15 +121,37 @@ def format_results_for_api(results: dict[str, Any]) -> dict[str, Any]:
     summary = results.get("summary", {})
     raw_results = results.get("results", [])
 
-    # Format individual results
+    # Format individual results with full detail
     formatted_results = []
     for r in raw_results:
+        # Format criteria results with full details
+        criteria_results = []
+        for c in r.get("criteria_results", []):
+            criteria_results.append({
+                "id": c.get("id", "unknown"),
+                "description": c.get("description", ""),
+                "check_type": c.get("check_type", ""),
+                "expected": c.get("expected"),
+                "actual": c.get("actual"),
+                "passed": c.get("passed", False),
+                "error": c.get("error", ""),
+            })
+
         formatted_results.append({
             "case_id": r.get("id", "unknown"),
+            "category": r.get("category", "unknown"),
             "passed": r.get("passed", False),
             "score": 1.0 if r.get("passed", False) else 0.0,
             "duration_ms": int(r.get("response_time_ms", 0)),
             "error": None if r.get("passed", False) else ", ".join(r.get("errors", [])) or "Test failed",
+            # Full details for expandable UI
+            "input": r.get("input", ""),
+            "response": r.get("response", ""),
+            "tool_calls": r.get("tool_calls", []),
+            "tool_call_details": r.get("tool_call_details", []),
+            "tool_outputs": r.get("tool_outputs", []),
+            "confidence": r.get("confidence", 0.0),
+            "criteria_results": criteria_results,
         })
 
     return {
@@ -145,16 +167,25 @@ def format_results_for_api(results: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def run_evals_async() -> str:
+async def run_evals_async(config: dict[str, Any] | None = None) -> str:
     """Run all evals asynchronously.
 
     This imports and runs the eval runner, saving results to a file.
+
+    Args:
+        config: Optional eval configuration dict with keys:
+            - fact_checking: bool
+            - hallucination_detection: bool
+            - confidence_scoring: bool
+            - hitl_enabled: bool
+            - confidence_threshold: int
+            - strict_mode: bool
 
     Returns:
         The run ID (timestamp-based)
     """
     # Import here to avoid circular imports
-    from evals.run_evals import load_eval_cases, run_evaluations, save_report
+    from evals.run_evals import load_eval_cases, run_evaluations, save_report, EvalConfig
 
     # Generate run ID
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -166,9 +197,24 @@ async def run_evals_async() -> str:
         logger.warning("No eval cases found")
         return run_id
 
+    # Convert config dict to EvalConfig if provided
+    eval_config = None
+    if config:
+        eval_config = EvalConfig(
+            fact_checking=config.get("fact_checking", True),
+            hallucination_detection=config.get("hallucination_detection", True),
+            confidence_scoring=config.get("confidence_scoring", True),
+            hitl_enabled=config.get("hitl_enabled", False),
+            confidence_threshold=config.get("confidence_threshold", 70),
+            strict_mode=config.get("strict_mode", False),
+        )
+        logger.info(f"Using provided config: {config}")
+    else:
+        logger.info("No config provided, will load from config store")
+
     # Run evaluations
     logger.info(f"Starting eval run {run_id} with {len(eval_cases)} cases")
-    report = await run_evaluations(eval_cases, verbose=False)
+    report = await run_evaluations(eval_cases, verbose=False, config=eval_config)
 
     # Save results
     output_path = EVAL_RESULTS_DIR / f"eval_report_{run_id}.json"

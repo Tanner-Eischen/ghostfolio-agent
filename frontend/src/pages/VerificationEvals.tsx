@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { verificationApi, evalsApi } from '../api/client';
-import type { VerificationConfig, EvalCase, EvalResult, EvalSummary } from '../api/client';
+import type { VerificationConfig, EvalCase, EvalResult, EvalSummary, EvalCriterionResult, ToolCallDetail } from '../api/client';
 
 // Configurable constants
 const SAVED_INDICATOR_DURATION_MS = 2000;
@@ -23,6 +23,399 @@ const emptySummary: EvalSummary = {
   avg_latency_ms: 0,
   hallucination_rate: 0,
 };
+
+// Check type descriptions for legend
+const CHECK_TYPE_DESCRIPTIONS: Record<string, string> = {
+  tool_called: 'Verifies expected tool was invoked',
+  tool_not_called: 'Ensures dangerous/unwanted tools aren\'t called',
+  field_present: 'Checks output contains expected field',
+  field_matches: 'Validates field value (with tolerance)',
+  value_in_range: 'Ensures numeric value is in valid range',
+  timestamp_fresh: 'Validates data isn\'t stale',
+  not_contains: 'Ensures response doesn\'t contain forbidden terms',
+  verification_gate: 'Runs single gate from 4-gate system',
+  verification_verdict: 'Full 4-gate verification with confidence',
+};
+
+// Verification gate descriptions
+const VERIFICATION_GATES = [
+  {
+    name: 'Syntactic Gate',
+    icon: 'code',
+    color: 'text-blue-400',
+    bgColor: 'bg-blue-500/20',
+    checks: [
+      'Validates required fields exist',
+      'Checks numeric fields are valid numbers',
+      'Ensures scores are in 0-100 range',
+      'Validates OHLC constraints (high >= open/close)',
+    ],
+  },
+  {
+    name: 'Temporal Gate',
+    icon: 'schedule',
+    color: 'text-amber-400',
+    bgColor: 'bg-amber-500/20',
+    checks: [
+      'Checks timestamp freshness',
+      'Quotes: max 5min stale',
+      'Portfolio data: max 24h stale',
+    ],
+  },
+  {
+    name: 'Cross-Source Gate',
+    icon: 'compare_arrows',
+    color: 'text-purple-400',
+    bgColor: 'bg-purple-500/20',
+    checks: [
+      'Compares prices against independent sources',
+      '0.05% price tolerance, 1% value tolerance',
+      'Validates holdings match between sources',
+    ],
+  },
+  {
+    name: 'Economic Plausibility Gate',
+    icon: 'trending_up',
+    color: 'text-emerald-400',
+    bgColor: 'bg-emerald-500/20',
+    checks: [
+      'No negative prices/values',
+      'Bid < Ask for quotes',
+      'Allocation percentages sum to ~100%',
+      'Warns on high concentration (>50% in one asset)',
+    ],
+  },
+];
+
+// Toggle card data with impact info
+const VERIFICATION_LAYERS = [
+  {
+    key: 'fact_checking' as const,
+    label: 'Fact Checking',
+    icon: 'fact_check',
+    description: 'Verify against data sources',
+    color: 'text-emerald-400',
+    bgColor: 'bg-emerald-500/20',
+    impactIfDisabled: 'Agent responses won\'t be validated against Ghostfolio data. Errors and hallucinations may go undetected.',
+  },
+  {
+    key: 'hallucination_detection' as const,
+    label: 'Hallucination Detection',
+    icon: 'psychology_alt',
+    description: 'Flag fabricated info',
+    color: 'text-amber-400',
+    bgColor: 'bg-amber-500/20',
+    impactIfDisabled: 'Responses may contain fabricated data or claims that appear plausible but have no basis in actual data.',
+  },
+  {
+    key: 'confidence_scoring' as const,
+    label: 'Confidence Scoring',
+    icon: 'speed',
+    description: 'Report confidence levels',
+    color: 'text-blue-400',
+    bgColor: 'bg-blue-500/20',
+    impactIfDisabled: 'You won\'t know how reliable a response is. Low-quality responses may appear as trustworthy as high-quality ones.',
+  },
+];
+
+// Expandable Eval Result Card Component
+function EvalResultCard({ result, testCase }: { result: EvalResult | undefined; testCase: EvalCase }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const passedCriteria = result?.criteria_results?.filter(c => c.passed).length ?? 0;
+  const totalCriteria = result?.criteria_results?.length ?? 0;
+
+  return (
+    <div className="border border-surface-border rounded-lg overflow-hidden">
+      {/* Header row - always visible */}
+      <div
+        className={`flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-surface-border/30 transition-colors ${expanded ? 'bg-surface-darker' : ''}`}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-white text-sm font-medium truncate">{testCase.name}</span>
+            {result?.criteria_results && result.criteria_results.length > 0 && (
+              <span className="text-xs text-text-dim">
+                ({passedCriteria}/{totalCriteria} criteria)
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-text-dim mt-0.5 truncate">{testCase.description}</p>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <span className="text-xs text-text-dim hidden sm:block">{testCase.category}</span>
+
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+            result?.passed
+              ? 'bg-emerald-500/20 text-emerald-400'
+              : result
+              ? 'bg-red-500/20 text-red-400'
+              : 'bg-slate-500/20 text-slate-400'
+          }`}>
+            <span className="material-symbols-outlined text-xs">
+              {result?.passed ? 'check_circle' : result ? 'cancel' : 'pending'}
+            </span>
+            {result?.passed ? 'Passed' : result ? 'Failed' : 'Pending'}
+          </span>
+
+          {result && (
+            <div className="flex items-center gap-3 text-xs text-text-dim">
+              {result.confidence !== undefined && (
+                <span className="hidden sm:flex items-center gap-1">
+                  <span className="material-symbols-outlined text-sm">speed</span>
+                  {result.confidence.toFixed(1)}%
+                </span>
+              )}
+              <span>{result.duration_ms}ms</span>
+            </div>
+          )}
+
+          <span className={`material-symbols-outlined text-text-dim transition-transform ${expanded ? 'rotate-180' : ''}`}>
+            expand_more
+          </span>
+        </div>
+      </div>
+
+      {/* Expanded content */}
+      {expanded && result && (
+        <div className="border-t border-surface-border bg-surface-darker/50 p-4 space-y-4">
+          {/* Input */}
+          {result.input && (
+            <div>
+              <div className="text-[10px] uppercase text-text-dim font-semibold tracking-wider mb-1">Input</div>
+              <div className="text-sm text-white bg-surface-dark rounded px-3 py-2 border border-surface-border">
+                "{result.input}"
+              </div>
+            </div>
+          )}
+
+          {/* Criteria Results */}
+          {result.criteria_results && result.criteria_results.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase text-text-dim font-semibold tracking-wider mb-2">
+                Criteria Results ({passedCriteria}/{totalCriteria} passed)
+              </div>
+              <div className="space-y-2">
+                {result.criteria_results.map((criterion) => (
+                  <CriterionResult key={criterion.id} criterion={criterion} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tool Calls */}
+          {result.tool_calls && result.tool_calls.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase text-text-dim font-semibold tracking-wider mb-1">
+                Tool Calls ({result.tool_calls.length})
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {result.tool_calls.map((tool, idx) => (
+                  <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 bg-primary/20 text-primary rounded text-xs font-mono">
+                    <span className="material-symbols-outlined text-sm">terminal</span>
+                    {tool}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tool Call Details with Args */}
+          {result.tool_call_details && result.tool_call_details.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase text-text-dim font-semibold tracking-wider mb-1">Tool Call Details</div>
+              <div className="space-y-1">
+                {result.tool_call_details.map((tc, idx) => (
+                  <ToolCallDetailRow key={idx} detail={tc} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tool Output */}
+          {result.tool_outputs && result.tool_outputs.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase text-text-dim font-semibold tracking-wider mb-1">Tool Output</div>
+              <pre className="text-xs text-text-dim bg-surface-dark rounded px-3 py-2 border border-surface-border overflow-x-auto max-h-48 overflow-y-auto">
+                {JSON.stringify(result.tool_outputs, null, 2)}
+              </pre>
+            </div>
+          )}
+
+          {/* Agent Response */}
+          {result.response && (
+            <div>
+              <div className="text-[10px] uppercase text-text-dim font-semibold tracking-wider mb-1">Agent Response</div>
+              <div className="text-sm text-white bg-surface-dark rounded px-3 py-2 border border-surface-border max-h-32 overflow-y-auto">
+                {result.response}
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {result.error && (
+            <div>
+              <div className="text-[10px] uppercase text-red-400 font-semibold tracking-wider mb-1">Error</div>
+              <div className="text-sm text-red-400 bg-red-500/10 rounded px-3 py-2 border border-red-500/30">
+                {result.error}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Criterion Result Component
+function CriterionResult({ criterion }: { criterion: EvalCriterionResult }) {
+  return (
+    <div className={`p-2 rounded border ${criterion.passed ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 min-w-0">
+          <span className={`material-symbols-outlined text-sm mt-0.5 ${criterion.passed ? 'text-emerald-400' : 'text-red-400'}`}>
+            {criterion.passed ? 'check_circle' : 'cancel'}
+          </span>
+          <div className="min-w-0">
+            <div className="text-xs text-white font-medium">{criterion.id}: {criterion.description}</div>
+            <div className="flex flex-wrap items-center gap-2 mt-1 text-[10px]">
+              <span className="text-text-dim">Type:</span>
+              <span className="text-primary font-mono">{criterion.check_type}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[10px]">
+              <span className="text-text-dim">Expected:</span>
+              <span className="text-emerald-400 font-mono truncate max-w-32" title={JSON.stringify(criterion.expected)}>
+                {formatValue(criterion.expected)}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[10px]">
+              <span className="text-text-dim">Actual:</span>
+              <span className={`${criterion.passed ? 'text-emerald-400' : 'text-red-400'} font-mono truncate max-w-32`} title={JSON.stringify(criterion.actual)}>
+                {formatValue(criterion.actual)}
+              </span>
+            </div>
+          </div>
+        </div>
+        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${criterion.passed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+          {criterion.passed ? 'PASS' : 'FAIL'}
+        </span>
+      </div>
+      {criterion.error && (
+        <div className="mt-1 text-[10px] text-red-400 ml-6">
+          {criterion.error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Tool Call Detail Row Component
+function ToolCallDetailRow({ detail }: { detail: ToolCallDetail }) {
+  return (
+    <div className="text-xs font-mono bg-surface-dark rounded px-2 py-1 border border-surface-border">
+      <span className="text-primary">{detail.tool}</span>
+      {detail.input && Object.keys(detail.input).length > 0 && (
+        <span className="text-text-dim">({JSON.stringify(detail.input)})</span>
+      )}
+    </div>
+  );
+}
+
+// Format value for display
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value === 'string') return value.length > 30 ? value.slice(0, 30) + '...' : value;
+  if (Array.isArray(value)) return `[${value.length} items]`;
+  if (typeof value === 'object') return JSON.stringify(value).slice(0, 40) + (JSON.stringify(value).length > 40 ? '...' : '');
+  return String(value);
+}
+
+// Verification Docs Section Component
+function VerificationDocsSection() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <section className="rounded-xl border border-surface-border bg-surface-dark overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-5 py-3 flex items-center justify-between hover:bg-surface-border/30 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary">school</span>
+          <h3 className="text-white font-bold">How Verification Works</h3>
+        </div>
+        <span className={`material-symbols-outlined text-text-dim transition-transform ${expanded ? 'rotate-180' : ''}`}>
+          expand_more
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-4 border-t border-surface-border">
+          <p className="text-sm text-text-dim mt-3 mb-4">
+            The agent uses a 4-gate verification system to ensure data quality and catch errors:
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {VERIFICATION_GATES.map((gate) => (
+              <div key={gate.name} className="p-3 rounded-lg bg-surface-darker border border-surface-border">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className={`p-1.5 rounded ${gate.bgColor}`}>
+                    <span className={`material-symbols-outlined text-sm ${gate.color}`}>{gate.icon}</span>
+                  </div>
+                  <h4 className="text-white text-sm font-medium">{gate.name}</h4>
+                </div>
+                <ul className="space-y-1">
+                  {gate.checks.map((check, idx) => (
+                    <li key={idx} className="flex items-start gap-1.5 text-xs text-text-dim">
+                      <span className={`material-symbols-outlined text-xs ${gate.color} mt-0.5`}>check</span>
+                      {check}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Check Type Legend Component
+function CheckTypeLegend() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="bg-surface-darker rounded-lg border border-surface-border overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-2 flex items-center justify-between hover:bg-surface-border/30 transition-colors"
+      >
+        <span className="text-xs text-text-dim font-medium">Check Types Reference</span>
+        <span className={`material-symbols-outlined text-text-dim text-sm transition-transform ${expanded ? 'rotate-180' : ''}`}>
+          expand_more
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3 border-t border-surface-border">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 mt-2">
+            {Object.entries(CHECK_TYPE_DESCRIPTIONS).map(([type, desc]) => (
+              <div key={type} className="flex items-start gap-2 py-1">
+                <code className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded font-mono whitespace-nowrap">
+                  {type}
+                </code>
+                <span className="text-[10px] text-text-dim">{desc}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function VerificationEvals() {
   // Verification state
@@ -162,7 +555,8 @@ export function VerificationEvals() {
     pollingRef.current = true;
 
     try {
-      await evalsApi.runAll();
+      // Pass current verification config to eval run
+      await evalsApi.runAll(config);
 
       // Poll for results (evals run async)
       let attempts = 0;
@@ -341,6 +735,11 @@ export function VerificationEvals() {
           </div>
         )}
 
+        {/* How Verification Works Documentation */}
+        <div className="mb-6">
+          <VerificationDocsSection />
+        </div>
+
         {/* Two Column Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column: Verification Config */}
@@ -354,71 +753,36 @@ export function VerificationEvals() {
                 </h3>
               </div>
               <div className="p-4 space-y-3">
-                {/* Fact Checking */}
-                <div className="flex items-center justify-between p-3 rounded-lg bg-surface-darker border border-surface-border">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-400">
-                      <span className="material-symbols-outlined text-lg">fact_check</span>
+                {VERIFICATION_LAYERS.map((layer) => (
+                  <div key={layer.key} className="p-3 rounded-lg bg-surface-darker border border-surface-border">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg ${layer.bgColor}`}>
+                          <span className={`material-symbols-outlined text-lg ${layer.color}`}>{layer.icon}</span>
+                        </div>
+                        <div>
+                          <h4 className="text-white text-sm font-medium">{layer.label}</h4>
+                          <p className="text-xs text-text-dim">{layer.description}</p>
+                        </div>
+                      </div>
+                      <label className="relative inline-flex h-5 w-9 items-center rounded-full bg-surface-border cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={config[layer.key]}
+                          onChange={(e) => updateConfig(layer.key, e.target.checked)}
+                          className="peer sr-only"
+                        />
+                        <span className={`h-3 w-3 transform rounded-full bg-white transition-transform ${config[layer.key] ? 'translate-x-5 bg-primary' : 'translate-x-1'}`} />
+                      </label>
                     </div>
-                    <div>
-                      <h4 className="text-white text-sm font-medium">Fact Checking</h4>
-                      <p className="text-xs text-text-dim">Verify against data sources</p>
-                    </div>
+                    {!config[layer.key] && (
+                      <div className="flex items-start gap-2 mt-2 p-2 rounded bg-amber-500/10 border border-amber-500/20">
+                        <span className="material-symbols-outlined text-amber-400 text-sm">warning</span>
+                        <p className="text-[10px] text-amber-200/80">{layer.impactIfDisabled}</p>
+                      </div>
+                    )}
                   </div>
-                  <label className="relative inline-flex h-5 w-9 items-center rounded-full bg-surface-border cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={config.fact_checking}
-                      onChange={(e) => updateConfig('fact_checking', e.target.checked)}
-                      className="peer sr-only"
-                    />
-                    <span className={`h-3 w-3 transform rounded-full bg-white transition-transform ${config.fact_checking ? 'translate-x-5 bg-primary' : 'translate-x-1'}`} />
-                  </label>
-                </div>
-
-                {/* Hallucination Detection */}
-                <div className="flex items-center justify-between p-3 rounded-lg bg-surface-darker border border-surface-border">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400">
-                      <span className="material-symbols-outlined text-lg">psychology_alt</span>
-                    </div>
-                    <div>
-                      <h4 className="text-white text-sm font-medium">Hallucination Detection</h4>
-                      <p className="text-xs text-text-dim">Flag fabricated info</p>
-                    </div>
-                  </div>
-                  <label className="relative inline-flex h-5 w-9 items-center rounded-full bg-surface-border cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={config.hallucination_detection}
-                      onChange={(e) => updateConfig('hallucination_detection', e.target.checked)}
-                      className="peer sr-only"
-                    />
-                    <span className={`h-3 w-3 transform rounded-full bg-white transition-transform ${config.hallucination_detection ? 'translate-x-5 bg-primary' : 'translate-x-1'}`} />
-                  </label>
-                </div>
-
-                {/* Confidence Scoring */}
-                <div className="flex items-center justify-between p-3 rounded-lg bg-surface-darker border border-surface-border">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-blue-500/20 text-blue-400">
-                      <span className="material-symbols-outlined text-lg">speed</span>
-                    </div>
-                    <div>
-                      <h4 className="text-white text-sm font-medium">Confidence Scoring</h4>
-                      <p className="text-xs text-text-dim">Report confidence levels</p>
-                    </div>
-                  </div>
-                  <label className="relative inline-flex h-5 w-9 items-center rounded-full bg-surface-border cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={config.confidence_scoring}
-                      onChange={(e) => updateConfig('confidence_scoring', e.target.checked)}
-                      className="peer sr-only"
-                    />
-                    <span className={`h-3 w-3 transform rounded-full bg-white transition-transform ${config.confidence_scoring ? 'translate-x-5 bg-primary' : 'translate-x-1'}`} />
-                  </label>
-                </div>
+                ))}
               </div>
             </section>
 
@@ -547,7 +911,10 @@ export function VerificationEvals() {
               </div>
             )}
 
-            {/* Results Table */}
+            {/* Check Type Legend */}
+            {hasRun && <CheckTypeLegend />}
+
+            {/* Results List */}
             <div className="bg-surface-dark border border-surface-border rounded-xl overflow-hidden">
               {cases.length === 0 ? (
                 <div className="p-8 text-center">
@@ -555,65 +922,14 @@ export function VerificationEvals() {
                   <p className="text-text-dim mt-2">No eval cases found. Check that evals/eval_cases/mvp_evals.json exists.</p>
                 </div>
               ) : (
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-surface-darker text-[10px] uppercase text-text-dim font-semibold tracking-wider">
-                      <th className="px-4 py-3 text-left">Test Case</th>
-                      <th className="px-4 py-3 text-left">Category</th>
-                      <th className="px-4 py-3 text-center">Status</th>
-                      <th className="px-4 py-3 text-center">Score</th>
-                      <th className="px-4 py-3 text-center">Latency</th>
-                      <th className="px-4 py-3 text-left">Error</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-surface-border">
-                    {filteredCases.map((testCase) => {
-                      const result = getResult(testCase.id);
-                      return (
-                        <tr key={testCase.id} className="hover:bg-surface-border/30 transition-colors">
-                          <td className="px-4 py-3">
-                            <div>
-                              <span className="text-white text-sm font-medium">{testCase.name}</span>
-                              <p className="text-[10px] text-text-dim mt-0.5">{testCase.description}</p>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="text-xs text-text-dim">{testCase.category}</span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-                              result?.passed
-                                ? 'bg-emerald-500/20 text-emerald-400'
-                                : result
-                                ? 'bg-red-500/20 text-red-400'
-                                : 'bg-slate-500/20 text-slate-400'
-                            }`}>
-                              <span className="material-symbols-outlined text-xs">
-                                {result?.passed ? 'check_circle' : result ? 'cancel' : 'pending'}
-                              </span>
-                              {result?.passed ? 'Passed' : result ? 'Failed' : 'Pending'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className={`font-mono text-sm ${result && result.score >= 0.8 ? 'text-emerald-400' : result && result.score >= 0.5 ? 'text-amber-400' : 'text-text-dim'}`}>
-                              {result ? `${Math.round(result.score * 100)}%` : '-'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <span className="text-text-dim font-mono text-xs">
-                              {result ? `${result.duration_ms}ms` : '-'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            {result?.error && (
-                              <span className="text-[10px] text-red-400">{result.error}</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div className="divide-y divide-surface-border">
+                  {filteredCases.map((testCase) => {
+                    const result = getResult(testCase.id);
+                    return (
+                      <EvalResultCard key={testCase.id} result={result} testCase={testCase} />
+                    );
+                  })}
+                </div>
               )}
             </div>
 
