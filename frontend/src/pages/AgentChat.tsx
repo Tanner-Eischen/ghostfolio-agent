@@ -183,6 +183,7 @@ export function AgentChat() {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [generatedTool, setGeneratedTool] = useState<GeneratedToolResponse | null>(null);
   const [generatingToolId, setGeneratingToolId] = useState<string | null>(null);
+  const [registeringTool, setRegisteringTool] = useState(false);
   const [selectedToolIds, setSelectedToolIds] = useState<Set<string>>(new Set());
   const [toolsLoading, setToolsLoading] = useState(false);
 
@@ -194,6 +195,44 @@ export function AgentChat() {
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 3000);
+  };
+
+  // Handler to register a generated tool
+  const handleRegisterTool = async () => {
+    if (!generatedTool) return;
+
+    setRegisteringTool(true);
+    try {
+      const response = await toolsApi.register({
+        name: generatedTool.name,
+        description: generatedTool.description,
+        generated_code: generatedTool.generated_code,
+        source_suggestion_id: generatedTool.source_suggestion_id,
+        parameters: generatedTool.parameters,
+      });
+
+      if (response.success) {
+        showToast(`Tool "${response.tool_name}" registered successfully!`, 'success');
+        // Clear the generated tool
+        setGeneratedTool(null);
+        // Refresh the tool list
+        setToolsLoading(true);
+        try {
+          const toolsData = await toolsApi.list();
+          setRegisteredTools(toolsData);
+        } catch {
+          // Non-fatal: tool is registered even if list refresh fails
+        } finally {
+          setToolsLoading(false);
+        }
+      } else {
+        showToast(response.message || 'Failed to register tool', 'error');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to register tool', 'error');
+    } finally {
+      setRegisteringTool(false);
+    }
   };
 
   // Generate prebuilt questions based on tools
@@ -1047,14 +1086,35 @@ export function AgentChat() {
               <section className="rounded-xl bg-surface-dark border border-primary/30 overflow-hidden">
                 <div className="px-4 py-3 border-b border-surface-border flex items-center justify-between">
                   <h3 className="text-white font-semibold">Generated tool</h3>
-                  <button
-                    type="button"
-                    onClick={() => setGeneratedTool(null)}
-                    className="text-text-dim hover:text-white p-1 rounded"
-                    aria-label="Close"
-                  >
-                    <span className="material-symbols-outlined">close</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={registeringTool}
+                      onClick={handleRegisterTool}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Register this tool to make it available to the agent"
+                    >
+                      {registeringTool ? (
+                        <>
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                          Registering…
+                        </>
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined text-sm">add</span>
+                          Register Tool
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGeneratedTool(null)}
+                      className="text-text-dim hover:text-white p-1 rounded"
+                      aria-label="Close"
+                    >
+                      <span className="material-symbols-outlined">close</span>
+                    </button>
+                  </div>
                 </div>
                 <div className="p-4">
                   {generatedTool.generated_code && (

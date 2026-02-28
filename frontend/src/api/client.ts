@@ -211,6 +211,8 @@ export const repoApi = {
   // File explorer and code preview
   getFiles: (repoId: string, maxDepth?: number) =>
     fetchApi<FileTreeResponse>(`/repo/${repoId}/files${maxDepth ? `?max_depth=${maxDepth}` : ''}`),
+  getFileContent: (repoId: string, path: string) =>
+    fetchApi<{ path: string; content: string }>(`/repo/${repoId}/file?path=${encodeURIComponent(path)}`),
   getInjectionPoints: (repoId: string, limit?: number) =>
     fetchApi<InjectionPointsResponse>(`/repo/${repoId}/injection-points${limit ? `?limit=${limit}` : ''}`),
   getInsights: (repoId: string) =>
@@ -281,6 +283,24 @@ export interface Tool {
   description: string;
   parameters: Record<string, unknown>;
   status: 'active' | 'beta' | 'disabled';
+  source?: 'core' | 'generated';
+}
+
+export interface ToolRegistrationRequest {
+  name: string;
+  description: string;
+  generated_code: string;
+  source_suggestion_id?: string;
+  parameters?: Record<string, unknown>;
+}
+
+export interface ToolRegistrationResponse {
+  success: boolean;
+  message: string;
+  tool_name: string | null;
+  tool_id: string | null;
+  warnings: string[];
+  agent_reloaded: boolean;
 }
 
 export const toolsApi = {
@@ -292,6 +312,10 @@ export const toolsApi = {
       body: { parameters: params, repo_id: repoId },
     }),
   create: (tool: Omit<Tool, 'id'>) => fetchApi<Tool>('/tools', { method: 'POST', body: tool }),
+  register: (request: ToolRegistrationRequest) =>
+    fetchApi<ToolRegistrationResponse>('/tools/register', { method: 'POST', body: request }),
+  deleteGenerated: (toolName: string) =>
+    fetchApi<{ success: boolean; message: string }>(`/tools/generated/${toolName}`, { method: 'DELETE' }),
 };
 
 // Tool Detail types
@@ -382,7 +406,11 @@ export interface EvalSummary {
 
 export const evalsApi = {
   getCases: () => fetchApi<EvalCase[]>('/evals/cases'),
-  runAll: () => fetchApi<{ run_id: string }>('/evals/run', { method: 'POST' }),
+  runAll: (config?: Partial<VerificationConfig>) =>
+    fetchApi<{ run_id: string }>('/evals/run', {
+      method: 'POST',
+      body: config ? { config } : {},
+    }),
   getResults: () => fetchApi<{ summary: EvalSummary; results: EvalResult[] }>('/evals/results'),
 };
 

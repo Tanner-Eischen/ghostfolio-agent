@@ -18,7 +18,7 @@ from langsmith import traceable
 from langsmith.run_helpers import get_current_run_tree
 
 from src.agent.prompts import SYSTEM_PROMPT
-from src.tools import ALL_TOOLS
+from src.tools import CORE_TOOLS, get_all_tools
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
 from src.utils.tracing import configure_langsmith, get_trace_url, is_tracing_enabled, TraceContext
@@ -94,8 +94,8 @@ class GhostfolioAgent:
             api_key=self.settings.openai_api_key or None,
         )
 
-        # Store tools
-        self.tools = ALL_TOOLS
+        # Store tools (core + generated)
+        self.tools = get_all_tools()
         self.tool_map = {tool.name: tool for tool in self.tools}
 
         # Create the LangGraph agent
@@ -513,6 +513,39 @@ class GhostfolioAgent:
             return True
         return False
 
+    def reload_tools(self) -> bool:
+        """Reload tools from registry, recreate LangGraph.
+
+        Call this after registering new generated tools to make them
+        available to the agent.
+
+        Returns:
+            True if reload was successful
+        """
+        try:
+            from src.tools.registry import clear_tool_cache
+            # Clear the generated tools cache first
+            clear_tool_cache()
+
+            # Reload all tools
+            self.tools = get_all_tools()
+            self.tool_map = {tool.name: tool for tool in self.tools}
+
+            # Recreate the LangGraph agent
+            self.graph = create_agent(
+                self.llm,
+                self.tools,
+                system_prompt=SYSTEM_PROMPT,
+                checkpointer=MemorySaver(),
+            )
+
+            self.logger.info(f"Reloaded tools: {len(self.tools)} tools available")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to reload tools: {e}")
+            return False
+
 
 # Singleton instance
 _agent_instance: GhostfolioAgent | None = None
@@ -524,3 +557,18 @@ def get_agent() -> GhostfolioAgent:
     if _agent_instance is None:
         _agent_instance = GhostfolioAgent()
     return _agent_instance
+
+
+def reload_agent_tools() -> bool:
+    """Reload tools in the singleton agent.
+
+    Call this after registering new generated tools.
+
+    Returns:
+        True if reload was successful, False if agent not initialized or failed
+    """
+    global _agent_instance
+    if _agent_instance is None:
+        logger.warning("Agent not initialized, cannot reload tools")
+        return False
+    return _agent_instance.reload_tools()

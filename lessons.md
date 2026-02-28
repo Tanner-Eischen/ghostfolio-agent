@@ -1,5 +1,120 @@
 # Lessons Learned
 
+## 2026-02-28: Add '+' Button to Register Generated Tools
+
+**Summary**
+- Preserved 3 Ghostfolio core tools: `portfolio_analysis`, `market_data_lookup`, `risk_assessment`
+- Created `src/tools/generated_store.py` - Thread-safe persistence layer for storing generated tools in `data/generated_tools/` directory
+- Created `src/tools/code_validator.py` - Safety validation for generated code (AST parsing, @tool decorator check, forbidden import blocking)
+- Modified `src/tools/registry.py` - Added `register_generated_tool()`, `get_all_tools()` returning CORE_TOOLS + generated tools
+- Modified `src/tools/__init__.py` - Added dynamic loading via `get_all_tools()` while keeping `CORE_TOOLS` as the base
+- Modified `src/agent/core.py` - Added `reload_tools()` method and `reload_agent_tools()` function to refresh agent tool set
+- Modified `src/api/routes.py` - Added `POST /tools/register` endpoint that validates, persists, loads, and reloads agent
+- Modified `frontend/src/api/client.ts` - Added `ToolRegistrationRequest`, `ToolRegistrationResponse` types and `toolsApi.register()` method
+- Modified `frontend/src/pages/AgentChat.tsx` - Added green "Register Tool" button with '+' icon in generated tool modal
+
+**Why**
+- Generated tool suggestions were dead-end - they produced code strings but never registered them with the agent
+- Users could see generated code but couldn't actually use it in the agent
+- Need a way to persist dynamically generated tools across server restarts
+- Keep Ghostfolio-specific tools as the base, allow repo-specific tools as extensions
+
+**What worked / what didn't**
+- **Worked**: Following the FeedbackStore pattern for the GeneratedToolStore made implementation consistent
+- **Worked**: Using AST validation to catch syntax errors before persisting
+- **Worked**: Clearing the tool cache on registration to force reload
+- **Worked**: Using dynamic import via `importlib.util` to load generated tools at runtime
+
+**Assumptions**
+- Generated tools use the LangChain `@tool` decorator
+- Tools are stored in `data/generated_tools/` directory with registry.json for metadata
+- Tool names are sanitized to valid Python identifiers
+
+**Edge cases**
+- Duplicate tool names: Rejected with error
+- Invalid syntax: Validate before save, reject with details
+- Dangerous imports: Block `os`, `subprocess`, `sys`, `socket`, etc.
+- Server restart: Load all tools from disk on startup
+- Tool crashes: Catch exception, don't crash agent
+
+**Verification**
+- `python -c "from src.tools.generated_store import get_generated_tool_store"` - OK
+- `python -c "from src.tools.registry import register_generated_tool, get_all_tools"` - OK
+- `python -c "from src.agent.core import reload_agent_tools"` - OK
+- Core tools verified: `['portfolio_analysis', 'market_data_lookup', 'risk_assessment']`
+- API routes `/tools/register` and `/tools/generated/{tool_name}` registered
+- Frontend Vite dev server started successfully (no TypeScript errors)
+
+**Follow-ups**
+- Optional: Add unit tests for generated tool registration flow
+- Optional: Add UI to manage/delete generated tools from the Tools tab
+
+## 2026-02-27: DependencyGraph Bug Fixes - Zoom, Overflow, Module Detection
+
+**Summary**
+- Fixed ReactFlow zoom/overflow issues by wrapping in ReactFlowProvider and using `fitView()` properly
+- Added explicit overflow-hidden and better fitView triggering with debounce
+- Improved module detection to find nested submodules (e.g., `agent/executor` within `agent`)
+- Fixed file scanning to avoid double-counting files in nested modules
+- Added empty state handling and "Fit" button for manual recentering
+- Improved UX: panOnScroll, disabled double-click zoom, better controls
+
+**Why**
+- DependencyGraph only showed 4 modules because detection only found top-level directories
+- Zoom was buggy (odd spots, overflow) due to ReactFlow needing ReactFlowProvider context
+- Files in nested submodules were counted multiple times
+
+**What worked / what didn't**
+- **Worked**: Using `is_relative_to()` to check if a file belongs to a submodule; wrapping in ReactFlowProvider for proper `useReactFlow()` hook access
+- **Fixed**: TypeScript type issues with inner component props
+
+**Assumptions**
+- Nested modules use "/" separator in module names
+- Python imports use "." but module paths use "/" - need conversion during matching
+
+**Edge cases**
+- Empty graph (no modules): shows "No modules detected" placeholder
+- Single node: handles gracefully
+- Self-imports: filtered out to avoid circular edges
+
+**Verification**
+- `python -c "from src.api.routes import _analyze_repo_dependencies"` - OK
+- `cd frontend && npm run build` - successful
+
+**Follow-ups**
+- Optional: Add actual force-directed layout option instead of radial=fallback to hierarchical
+
+## 2026-02-27: RepoAnalysis Page Refactor - Stats, Integration Points, and Repo Chat
+
+**Summary**
+- Added Quick Stats/Tech Stack panel in the sidebar showing file counts by extension and language breakdown
+- Renamed "Injection Points" to "Integration Points" with clarifying subtitle and route type badges (GET/POST/PUT/DELETE with color-coded icons)
+- Replaced static "Codebase Insight" card with interactive "Repo Chat" component for asking questions about the repository
+
+**Why**
+- The RepoAnalysis page needed better utility for understanding connected repositories
+- Users wanted to interact with the codebase through natural language questions
+- The term "Injection Points" was unclear; "Integration Points" with explanatory subtitle is more intuitive
+
+**What worked / what didn't**
+- **Worked**: Computing file stats on frontend from FileNode tree avoids backend changes; reusing `chatApi.send()` with `repo_id` parameter; RouteTypeBadge component handles both HTTP methods and frameworks
+
+**Assumptions**
+- File stats are computed from the existing file tree data (limited to depth fetched)
+- Chat API already supports `repo_id` parameter; backend handles repo context
+- Initial insight text serves as first assistant message in chat
+
+**Edge cases**
+- No file tree: RepoStats component returns null gracefully
+- No connected repo: RepoChat shows placeholder prompting user to connect
+- Unknown route types: Badge defaults to generic API styling
+
+**Verification**
+- `cd frontend && npm run build` - successful build with no TypeScript errors
+
+**Follow-ups**
+- Optional: Consider persisting chat history per repo across sessions
+
 ## 2026-02-27: Observability and Costs Plan Implementation
 
 **Summary**

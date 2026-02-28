@@ -25,7 +25,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.agent import GhostfolioAgent
-from src.tools.registry import list_tools as list_registered_tools, get_tool_schema
+from src.tools.registry import (
+    list_tools as list_registered_tools,
+    get_tool_schema,
+    register_generated_tool,
+    unregister_generated_tool,
+)
+from src.tools.code_validator import validate_generated_tool, sanitize_tool_name
+from src.agent.core import reload_agent_tools
 from src.utils.config import get_settings
 from src.utils.config_store import (
     get_verification_config_store,
@@ -413,7 +420,8 @@ async def clear_session(session_id: str) -> dict[str, Any]:
 async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     """Submit feedback for a response.
 
-    Feedback is logged to LangSmith for model improvement.
+    Feedback is logged to LangSmith for model improvement and stored locally
+    for eval integration.
 
     Args:
         request: Feedback with message ID, session ID, and rating
@@ -422,6 +430,7 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
         Confirmation of feedback submission
     """
     logged = False
+    stored_locally = False
 
     try:
         if is_tracing_enabled():
@@ -446,10 +455,27 @@ async def submit_feedback(request: FeedbackRequest) -> FeedbackResponse:
     except Exception as e:
         logger.warning(f"Could not log feedback to LangSmith: {e}")
 
+    # Store feedback locally for eval integration
+    try:
+        from src.utils.feedback_store import get_feedback_store
+
+        store = get_feedback_store()
+        store.store_feedback(
+            message_id=request.message_id,
+            session_id=request.session_id,
+            rating=request.rating,
+            comment=request.comment or "",
+        )
+        stored_locally = True
+        logger.info(f"Feedback stored locally: message={request.message_id}")
+
+    except Exception as e:
+        logger.warning(f"Could not store feedback locally: {e}")
+
     return FeedbackResponse(
         status="received",
         message_id=request.message_id,
-        logged=logged,
+        logged=logged or stored_locally,
     )
 
 
@@ -874,7 +900,7 @@ def _analyze_python_imports(file_path: Path, target_path: Path | None = None, kn
     Args:
         file_path: Path to Python file
         target_path: Root path of the target repository (for determining package name)
-        known_modules: List of known module names to match imports against
+        known_modules: List of known module names to match imports against (may include "/" for nested)
 
     Returns:
         Set of module names imported from the target package
@@ -887,23 +913,46 @@ def _analyze_python_imports(file_path: Path, target_path: Path | None = None, kn
 
     imports = set()
 
+    # Build a mapping from Python import path to module name
+    # For ghostfolio-agent, imports use "src.agent" prefix
+    # For other repos, might use different prefixes
+    py_to_module: dict[str, str] = {}
+    if known_modules:
+        for mod in known_modules:
+            # Convert "agent/executor" -> "agent.executor" for import matching
+            py_path = mod.replace("/", ".")
+            py_to_module[py_path] = mod
+            # Also add with "src." prefix for ghostfolio-agent style imports
+            py_to_module[f"src.{py_path}"] = mod
+            # Also add top-level module if nested
+            if "/" in mod:
+                top_level = mod.split("/")[0]
+                py_to_module[top_level] = top_level
+                py_to_module[f"src.{top_level}"] = top_level
+
     # If we have known modules, use them to match imports
     if known_modules:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    # Check if import matches any known module
-                    for mod in known_modules:
-                        if alias.name == mod or alias.name.startswith(f"{mod}."):
-                            imports.add(mod)
-                            break
+                    # Find most specific matching module
+                    best_match = None
+                    for py_p, m in py_to_module.items():
+                        if alias.name == py_p or alias.name.startswith(f"{py_p}."):
+                            if best_match is None or len(py_p) > len(best_match[0]):
+                                best_match = (py_p, m)
+                    if best_match:
+                        imports.add(best_match[1])
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
-                    # Check if from-import matches any known module
-                    for mod in known_modules:
-                        if node.module == mod or node.module.startswith(f"{mod}."):
-                            imports.add(mod)
-                            break
+                    # Find most specific matching module
+                    best_match = None
+                    for py_p, m in py_to_module.items():
+                        if node.module == py_p or node.module.startswith(f"{py_p}."):
+                            if best_match is None or len(py_p) > len(best_match[0]):
+                                best_match = (py_p, m)
+                    if best_match:
+                        imports.add(best_match[1])
         return imports
 
     # Fallback: Determine the package prefix to look for
@@ -1148,14 +1197,15 @@ def _count_endpoints_in_path(target_path: Path) -> int:
     return count
 
 
-def _detect_modules(target_path: Path | None = None) -> list[str]:
+def _detect_modules(target_path: Path | None = None, max_depth: int = 2) -> list[str]:
     """Detect actual modules in src/ or target directory.
 
     Args:
         target_path: Optional path to target repository. If None, uses ghostfolio-agent's src/
+        max_depth: Maximum depth to traverse for submodules (default 2)
 
     Returns:
-        List of module directory names
+        List of module directory names (can include paths like "agent/executor")
     """
     if target_path:
         # Look for Python and TypeScript modules in target
@@ -1174,7 +1224,7 @@ def _detect_modules(target_path: Path | None = None) -> list[str]:
             modules.append("prisma")
 
         # Root-level dirs that contain code (e.g. tools); skip expanded structs and non-code dirs
-        skip_root = {"node_modules", "dist", "build", "test", "tests", "docker", "data", ".git", ".config", ".husky", ".vscode", "apps", "libs", "src"}
+        skip_root = {"node_modules", "dist", "build", "test", "tests", "docker", "data", ".git", ".config", ".husky", ".vscode", "apps", "libs", "src", "frontend", "backend"}
         for item in target_path.iterdir():
             if not item.is_dir() or item.name.startswith(("_", ".")) or item.name == "__pycache__":
                 continue
@@ -1193,13 +1243,22 @@ def _detect_modules(target_path: Path | None = None) -> list[str]:
 
         return sorted(modules) if modules else ["(root)"]
     else:
-        # Default behavior for ghostfolio-agent
+        # Default behavior for ghostfolio-agent - detect submodules too
         src_dir = Path(__file__).parent.parent
         modules = []
         if src_dir.exists():
             for item in src_dir.iterdir():
                 if item.is_dir() and not item.name.startswith("_") and item.name != "__pycache__":
+                    # Add top-level module
                     modules.append(item.name)
+                    # Also detect submodules within each top-level module
+                    if max_depth > 1:
+                        for subitem in item.iterdir():
+                            if subitem.is_dir() and not subitem.name.startswith(("_", ".")):
+                                # Only add if it has code files directly
+                                has_code = any(subitem.glob("*.py")) or (subitem / "__init__.py").exists()
+                                if has_code:
+                                    modules.append(f"{item.name}/{subitem.name}")
         return sorted(modules)
 
 
@@ -1472,6 +1531,14 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
     modules = _detect_modules(target_path=target_path)
     path_aliases = _load_ts_path_aliases(repo_root) if target_path else {}
 
+    # Find which submodules belong to which parent (to avoid double counting)
+    submodule_parents: dict[str, str] = {}
+    for mod in modules:
+        if "/" in mod:
+            parent = "/".join(mod.split("/")[:-1])
+            if parent in modules:
+                submodule_parents[mod] = parent
+
     # Analyze imports and collect per-module stats and edge weights
     module_imports: dict[str, set[str]] = defaultdict(set)
     module_file_count: dict[str, int] = defaultdict(int)
@@ -1479,31 +1546,57 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
     module_external_deps: dict[str, set[str]] = defaultdict(set)
     edge_weights: dict[tuple[str, str], int] = defaultdict(int)
 
+    def get_submodule_names(parent: str) -> set[str]:
+        """Get all submodule names that are children of this module."""
+        return {m for m in modules if m.startswith(f"{parent}/")}
+
     for module in modules:
         module_dir = src_dir / module
         if not module_dir.exists():
             continue
+
+        # Get submodules to exclude from this module's scan (to avoid double counting)
+        submodules = get_submodule_names(module)
+        submodule_dirs = {src_dir / sm for sm in submodules}
+
+        def should_include_file(f: Path) -> bool:
+            """Check if file should be attributed to this module (not a submodule)."""
+            for sm_dir in submodule_dirs:
+                if f.is_relative_to(sm_dir):
+                    return False
+            return True
+
+        # Scan Python files
         for py_file in module_dir.rglob("*.py"):
+            if not should_include_file(py_file):
+                continue
             module_file_count[module] += 1
             try:
                 content = py_file.read_text(encoding="utf-8", errors="replace")
                 module_line_count[module] += len(content.splitlines())
                 imports = _analyze_python_imports(py_file, target_path=target_path, known_modules=modules)
+                # Filter out self-imports
+                imports = {imp for imp in imports if imp != module}
                 module_imports[module].update(imports)
                 for imp in imports:
                     edge_weights[(module, imp)] += 1
                 module_external_deps[module].update(_extract_external_deps_python(content, modules))
             except (FileNotFoundError, UnicodeDecodeError):
                 pass
+
         if target_path:
+            # Scan TypeScript files
             for ts_file in module_dir.rglob("*.ts"):
                 if ".spec." in ts_file.name or ".test." in ts_file.name:
+                    continue
+                if not should_include_file(ts_file):
                     continue
                 module_file_count[module] += 1
                 try:
                     content = ts_file.read_text(encoding="utf-8", errors="replace")
                     module_line_count[module] += len(content.splitlines())
                     imports = _analyze_ts_imports(ts_file, repo_root, modules, path_aliases)
+                    imports = {imp for imp in imports if imp != module}
                     module_imports[module].update(imports)
                     for imp in imports:
                         edge_weights[(module, imp)] += 1
@@ -1512,14 +1605,19 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
                     )
                 except (FileNotFoundError, UnicodeDecodeError):
                     pass
+
+            # Scan TSX files
             for tsx_file in module_dir.rglob("*.tsx"):
                 if ".spec." in tsx_file.name or ".test." in tsx_file.name:
+                    continue
+                if not should_include_file(tsx_file):
                     continue
                 module_file_count[module] += 1
                 try:
                     content = tsx_file.read_text(encoding="utf-8", errors="replace")
                     module_line_count[module] += len(content.splitlines())
                     imports = _analyze_ts_imports(tsx_file, repo_root, modules, path_aliases)
+                    imports = {imp for imp in imports if imp != module}
                     module_imports[module].update(imports)
                     for imp in imports:
                         edge_weights[(module, imp)] += 1
@@ -1528,8 +1626,27 @@ def _analyze_repo_dependencies(target_path: Path | None = None) -> tuple[list[De
                     )
                 except (FileNotFoundError, UnicodeDecodeError):
                     pass
+
+            # Scan JS files
             for js_file in module_dir.rglob("*.js"):
                 if ".spec." in js_file.name or ".test." in js_file.name:
+                    continue
+                if not should_include_file(js_file):
+                    continue
+                module_file_count[module] += 1
+                try:
+                    content = js_file.read_text(encoding="utf-8", errors="replace")
+                    module_line_count[module] += len(content.splitlines())
+                    imports = _analyze_ts_imports(js_file, repo_root, modules, path_aliases)
+                    imports = {imp for imp in imports if imp != module}
+                    module_imports[module].update(imports)
+                    for imp in imports:
+                        edge_weights[(module, imp)] += 1
+                    module_external_deps[module].update(
+                        _extract_external_deps_ts(content, path_aliases, modules)
+                    )
+                except (FileNotFoundError, UnicodeDecodeError):
+                    pass
                     continue
                 module_file_count[module] += 1
                 try:
@@ -1768,6 +1885,45 @@ async def get_repo_files(repo_id: str, max_depth: int = 3) -> FileTreeResponse:
 
     root = build_tree(repo_path)
     return FileTreeResponse(root=root)
+
+
+class FileContentResponse(BaseModel):
+    """Content of a single file in the repo."""
+
+    path: str = Field(..., description="Relative path of the file")
+    content: str = Field(..., description="File content (UTF-8)")
+
+
+@app.get("/repo/{repo_id}/file", response_model=FileContentResponse, tags=["Repo"])
+async def get_repo_file_content(repo_id: str, path: str = Query(..., description="Relative path to the file")) -> FileContentResponse:
+    """Get content of a file in a connected repository.
+
+    Path must be relative (e.g. src/api/routes.py). Path traversal is rejected.
+    """
+    manager = get_repo_manager()
+    repo_path = manager.get_repo_path(repo_id)
+
+    if not repo_path:
+        raise _repo_not_found(repo_id)
+
+    # Normalize: no leading slash, resolve and ensure under repo_path
+    clean_path = path.lstrip("/").replace("\\", "/")
+    if not clean_path or ".." in clean_path or clean_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    try:
+        full_path = (repo_path / clean_path).resolve()
+        full_path.relative_to(repo_path.resolve())
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    if not full_path.is_file():
+        raise HTTPException(status_code=404, detail="Not a file or not found")
+
+    try:
+        content = full_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Cannot read file: {e}")
+
+    return FileContentResponse(path=clean_path, content=content)
 
 
 @app.get("/repo/{repo_id}/injection-points", response_model=InjectionPointsResponse, tags=["Repo"])
@@ -2045,6 +2201,27 @@ class ToolCreateRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict, description="Tool parameters")
 
 
+class ToolRegistrationRequest(BaseModel):
+    """Request to register a generated tool."""
+
+    name: str = Field(..., min_length=1, description="Tool name")
+    description: str = Field(..., min_length=1, description="Tool description")
+    generated_code: str = Field(..., min_length=1, description="Python source code with @tool decorator")
+    source_suggestion_id: str | None = Field(default=None, description="ID of the suggestion that generated this tool")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Parameter schema")
+
+
+class ToolRegistrationResponse(BaseModel):
+    """Response from tool registration."""
+
+    success: bool = Field(..., description="Whether registration succeeded")
+    message: str = Field(..., description="Status message")
+    tool_name: str | None = Field(default=None, description="Registered tool name")
+    tool_id: str | None = Field(default=None, description="Tool ID (same as name)")
+    warnings: list[str] = Field(default_factory=list, description="Validation warnings")
+    agent_reloaded: bool = Field(default=False, description="Whether the agent was reloaded")
+
+
 @app.get("/tools", response_model=list[ToolResponse], tags=["Tools"])
 async def list_tools_registry() -> list[ToolResponse]:
     """List all registered tools.
@@ -2212,6 +2389,100 @@ async def create_tool(request: ToolCreateRequest) -> ToolResponse:
         parameters=request.parameters,
         status="inactive",  # Mark as inactive since it's not actually registered
     )
+
+
+@app.post("/tools/register", response_model=ToolRegistrationResponse, tags=["Tools"])
+async def register_tool(request: ToolRegistrationRequest) -> ToolRegistrationResponse:
+    """Register a generated tool and make it available to the agent.
+
+    This endpoint:
+    1. Validates the generated code for safety
+    2. Persists the tool to disk
+    3. Loads the tool dynamically
+    4. Reloads the agent to make the tool available
+
+    Args:
+        request: Tool registration request with name, description, and code
+
+    Returns:
+        ToolRegistrationResponse with success status and any warnings
+    """
+    logger.info(f"Registering generated tool: {request.name}")
+
+    # Validate the code first
+    validation = validate_generated_tool(request.generated_code)
+
+    if not validation.valid:
+        error_msg = "; ".join(validation.errors)
+        logger.warning(f"Tool validation failed: {error_msg}")
+        return ToolRegistrationResponse(
+            success=False,
+            message=f"Validation failed: {error_msg}",
+            tool_name=None,
+            warnings=validation.warnings,
+        )
+
+    # Sanitize the tool name
+    safe_name = sanitize_tool_name(request.name)
+
+    # Register the tool
+    success, message = register_generated_tool(
+        name=safe_name,
+        description=request.description,
+        generated_code=request.generated_code,
+        source_suggestion_id=request.source_suggestion_id,
+        parameters=request.parameters,
+    )
+
+    if not success:
+        logger.warning(f"Tool registration failed: {message}")
+        return ToolRegistrationResponse(
+            success=False,
+            message=message,
+            tool_name=None,
+            warnings=validation.warnings,
+        )
+
+    # Reload the agent to make the tool available
+    reloaded = reload_agent_tools()
+    if not reloaded:
+        logger.warning("Tool registered but agent reload failed")
+        # Tool is still registered, just needs manual reload later
+
+    logger.info(f"Tool '{safe_name}' registered successfully, agent reloaded: {reloaded}")
+
+    return ToolRegistrationResponse(
+        success=True,
+        message=f"Tool '{safe_name}' registered successfully",
+        tool_name=safe_name,
+        tool_id=safe_name,
+        warnings=validation.warnings,
+        agent_reloaded=reloaded,
+    )
+
+
+@app.delete("/tools/generated/{tool_name}", response_model=dict, tags=["Tools"])
+async def delete_generated_tool(tool_name: str) -> dict:
+    """Unregister a generated tool.
+
+    Args:
+        tool_name: Name of the generated tool to delete
+
+    Returns:
+        Dict with success status
+    """
+    logger.info(f"Unregistering generated tool: {tool_name}")
+
+    success, message = unregister_generated_tool(tool_name)
+
+    if success:
+        # Reload the agent
+        reload_agent_tools()
+
+    return {
+        "success": success,
+        "message": message,
+    }
 
 
 # ============================================================================
@@ -2682,6 +2953,15 @@ class EvalResultsResponse(BaseModel):
     results: list[EvalResultResponse] = Field(..., description="Individual results")
 
 
+class EvalRunRequest(BaseModel):
+    """Request model for running evals with optional config."""
+
+    config: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional eval configuration (fact_checking, hitl_enabled, etc.)",
+    )
+
+
 @app.get("/evals/cases", response_model=list[EvalCaseResponse], tags=["Evals"])
 async def list_eval_cases() -> list[EvalCaseResponse]:
     """List all evaluation cases.
@@ -2701,14 +2981,25 @@ async def list_eval_cases() -> list[EvalCaseResponse]:
 
 
 @app.post("/evals/run", tags=["Evals"])
-async def run_evals_endpoint() -> dict[str, str]:
+async def run_evals_endpoint(request: EvalRunRequest | None = None) -> dict[str, str]:
     """Run all evaluations.
 
     Triggers evaluation run for all test cases.
     This runs asynchronously and returns a run_id.
+
+    Optionally accepts a config object to override verification settings for this run:
+    - fact_checking: bool
+    - hallucination_detection: bool
+    - confidence_scoring: bool
+    - hitl_enabled: bool
+    - confidence_threshold: int (0-100)
+    - strict_mode: bool
     """
     try:
-        run_id = await run_evals_async()
+        config = request.config if request else None
+        if config:
+            logger.info(f"Running evals with custom config: {config}")
+        run_id = await run_evals_async(config)
         logger.info(f"Evaluation run triggered: {run_id}")
         return {"run_id": run_id, "status": "started"}
     except Exception as e:
