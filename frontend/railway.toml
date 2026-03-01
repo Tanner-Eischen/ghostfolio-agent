@@ -1,5 +1,6 @@
 # Frontend-only config. Use this when the frontend service has Root Directory = "frontend".
-# In Railway: Frontend service → Settings → Root Directory = "frontend", Config as code file = "frontend/railway.toml"
+# In Railway: Settings → Build → Root Directory = "frontend", Config file = "frontend/railway.toml" or "frontend/railway.json"
+# If the config file dropdown doesn't list .toml, use frontend/railway.json or type the path manually.
 
 [build]
 builder = "dockerfile"

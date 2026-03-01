@@ -14,15 +14,22 @@
 #   3. Backend service → Settings → Build → Dockerfile path: Dockerfile.backend
 #   4. Frontend service: use its own root and config so it never sees backend config:
 #      - Settings → Build → Root Directory: frontend
-#      - Settings → Build → Config as code file: frontend/railway.toml
+#      - Settings → Build → Config as code file: frontend/railway.json (or frontend/railway.toml; type path if not in dropdown)
 #      (That uses frontend/railway.toml + frontend/Dockerfile; no root railway.json.)
 #   5. Backend service → Settings → Build → Dockerfile path: Dockerfile.backend
 #      (No root railway.json in repo; set Dockerfile in Dashboard.)
 #   6. Set variables per service (see below)
 #
-# Deploy (per service):
-#   railway link    # choose backend or frontend
-#   railway up      # deploys current branch to the linked service
+# Deploy (per service) — CLI:
+#   railway link              # one-time: pick project + service (backend or frontend)
+#   railway up                 # deploy current branch to the linked service
+#   railway up -s frontend     # deploy to frontend without changing link
+#   railway up -s backend      # deploy to backend
+#   railway variable set KEY=value   # set env var for linked service
+#
+# Note: Root Directory and "Config as code file" cannot be set via CLI; set them
+# once in the Dashboard (Settings → Build) for each service, then use CLI for
+# link / up / variable.
 # =============================================================================
 
 # Backend Service (FastAPI)
