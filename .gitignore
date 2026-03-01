@@ -145,7 +145,7 @@ evals/test_cases/private/
 evals/__pycache__/
 
 # Deployment platforms
-.railway/
+
 .vercel/
 .netlify/
 
