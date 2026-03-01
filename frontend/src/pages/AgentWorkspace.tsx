@@ -163,7 +163,7 @@ export function AgentWorkspace() {
   const [connectedRepo, setConnectedRepo] = useState<RepoConnection | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [endpoints, setEndpoints] = useState<ApiEndpoint[]>([]);
-  const [fileTree, setFileTree] = useState<FileNode | null>(null);
+  const [_fileTree, setFileTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Chat state
