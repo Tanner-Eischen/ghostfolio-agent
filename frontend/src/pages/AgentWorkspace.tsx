@@ -6,7 +6,6 @@ import {
   toolsApi,
   feedbackApi,
   sessionsApi,
-  GHOSTFOLIO_TOKEN_STORAGE_KEY,
   type RepoConnection,
   type HealthResponse,
   type Tool,
@@ -182,13 +181,6 @@ export function AgentWorkspace() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [conversationsOpen, setConversationsOpen] = useState(false);
 
-  // User mode: stateless Ghostfolio token (from localStorage, sent per request)
-  const [userGhostfolioToken, setUserGhostfolioToken] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return localStorage.getItem(GHOSTFOLIO_TOKEN_STORAGE_KEY);
-  });
-  const [showGhostfolioForm, setShowGhostfolioForm] = useState(false);
-  const [ghostfolioInput, setGhostfolioInput] = useState('');
   const refreshSessions = useCallback(async () => {
     setHistoryLoading(true);
     try {
@@ -304,25 +296,6 @@ export function AgentWorkspace() {
     setEndpoints([]);
     setLoading(false);
     showToast('Disconnected', 'success');
-  };
-
-  const handleSaveGhostfolioToken = () => {
-    const t = ghostfolioInput.trim();
-    if (t) {
-      localStorage.setItem(GHOSTFOLIO_TOKEN_STORAGE_KEY, t);
-      setUserGhostfolioToken(t);
-      setGhostfolioInput('');
-      setShowGhostfolioForm(false);
-      showToast('Ghostfolio token saved (used only in this browser)', 'success');
-    }
-  };
-
-  const handleClearGhostfolioToken = () => {
-    localStorage.removeItem(GHOSTFOLIO_TOKEN_STORAGE_KEY);
-    setUserGhostfolioToken(null);
-    setGhostfolioInput('');
-    setShowGhostfolioForm(false);
-    showToast('Ghostfolio token cleared', 'success');
   };
 
   const handleSendMessage = async () => {
@@ -479,69 +452,6 @@ export function AgentWorkspace() {
                 connectedRepo={null}
               />
             )
-          )}
-          {appMode === 'user' && (
-            <div className="flex items-center gap-2 shrink-0">
-              {(health?.dependencies?.ghostfolio || userGhostfolioToken) && !showGhostfolioForm ? (
-                <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/20">
-                  <span className="size-1.5 rounded-full bg-emerald-400" />
-                  <span className="text-xs text-emerald-400">Ghostfolio Connected</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowGhostfolioForm(true)}
-                    className="text-xs text-slate-400 hover:text-white ml-0.5"
-                    aria-label="Change or clear token"
-                  >
-                    <span className="material-symbols-outlined text-sm">edit</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-1.5 rounded bg-surface-dark border border-surface-border p-2 min-w-[200px]">
-                  <span className="text-xs text-slate-400">
-                    {userGhostfolioToken ? 'Change Ghostfolio token' : 'Connect your Ghostfolio'}
-                  </span>
-                  <p className="text-[11px] text-slate-500">
-                    Get a token from Ghostfolio → Settings → Security. Stored only in this browser.
-                  </p>
-                  <input
-                    type="password"
-                    value={ghostfolioInput}
-                    onChange={(e) => setGhostfolioInput(e.target.value)}
-                    placeholder="Access token"
-                    className="w-full px-2 py-1.5 rounded bg-surface-darker border border-surface-border text-sm text-white placeholder:text-slate-500"
-                    aria-label="Ghostfolio access token"
-                  />
-                  <div className="flex gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={handleSaveGhostfolioToken}
-                      disabled={!ghostfolioInput.trim()}
-                      className="px-2 py-1 rounded bg-primary text-primary-contrast text-xs font-medium disabled:opacity-50"
-                    >
-                      Save
-                    </button>
-                    {userGhostfolioToken && (
-                      <button
-                        type="button"
-                        onClick={handleClearGhostfolioToken}
-                        className="px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/10"
-                      >
-                        Clear
-                      </button>
-                    )}
-                    {(userGhostfolioToken || health?.dependencies?.ghostfolio) && (
-                      <button
-                        type="button"
-                        onClick={() => { setShowGhostfolioForm(false); setGhostfolioInput(''); }}
-                        className="px-2 py-1 text-xs text-slate-400 hover:text-white"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
           )}
         </div>
       </div>
