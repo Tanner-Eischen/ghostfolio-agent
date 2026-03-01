@@ -492,9 +492,18 @@ class GhostfolioClient:
         request_url = get_request_ghostfolio_api_url() if request_token else None
         if request_token and not base_url:
             raw = (request_url and request_url.strip()) or "http://localhost:3333"
-            self._base_url = raw.rstrip("/")
+            raw = raw.rstrip("/")
+            # Local Ghostfolio runs over HTTP; normalize https://localhost -> http://localhost
+            if raw.lower().startswith("https://localhost"):
+                raw = "http" + raw[5:]
+                logger.info("Normalized localhost URL to HTTP (local Ghostfolio uses http)")
+            self._base_url = raw
         else:
-            self._base_url = base_url or settings.ghostfolio_api_url
+            self._base_url = (base_url or settings.ghostfolio_api_url or "").rstrip("/")
+        # Local Ghostfolio uses HTTP; normalize https://localhost -> http://localhost
+        if self._base_url.lower().startswith("https://localhost"):
+            self._base_url = "http" + self._base_url[5:]
+            logger.info("Normalized localhost URL to HTTP (local Ghostfolio uses http)")
         self._use_mock = use_mock or settings.use_mock_data
         self._bearer_token: str | None = None
         self._cache = get_cache()
