@@ -1,3 +1,10 @@
+# =============================================================================
+# Production/deploy: KEEP tracked (do not ignore):
+#   src/, requirements.txt, Dockerfile*, railway.json, railway.*.toml,
+#   .env.example, frontend/src/, frontend/public/, frontend/package*.json,
+#   README.md, tests/ (for CI)
+# =============================================================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -131,9 +138,11 @@ secrets.json
 .langchain/
 langchain.db
 
-# Eval datasets with potential sensitive data
+# Eval outputs and private datasets (not needed for production deploy)
+evals/results/
 evals/datasets/private/
 evals/test_cases/private/
+evals/__pycache__/
 
 # Deployment platforms
 .railway/
@@ -145,12 +154,22 @@ evals/test_cases/private/
 *.tmp
 *.temp
 
-# Data directory (cloned repos, etc.)
+# Data directory (sessions, cloned repos, runtime data)
 data/
+
+# Local Ghostfolio Docker setup (keep .env.example and docker-compose in repo if desired)
+ghostfolio-local/.env
 
 # Stitch downloads (design files)
 stitch-downloads/
 
-# Frontend node_modules
+# Frontend (ignore build artifacts and deps; track source and package.json)
 frontend/node_modules/
 frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Local planning/audit artifacts (optional: remove from ignore if you want them in repo)
+# *.plan.md
+# G4_*.md

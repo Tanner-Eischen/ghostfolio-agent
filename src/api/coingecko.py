@@ -135,8 +135,13 @@ class CoinGeckoClient:
 
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
-            timeout=15.0,
+            timeout=httpx.Timeout(15.0, connect=5.0),
             headers=headers,
+            limits=httpx.Limits(
+                max_keepalive_connections=6,
+                max_connections=12,
+                keepalive_expiry=20.0,
+            ),
         )
 
         logger.info(f"CoinGeckoClient initialized (mock={self._use_mock}, pro={bool(self._api_key)})")

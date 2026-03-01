@@ -188,6 +188,11 @@ STRATEGY_DEFAULTS = {
     "contribution_path": "langchain",
 }
 
+# Agent configuration defaults (LLM model for chat)
+AGENT_DEFAULTS = {
+    "model": "gpt-4o-mini",
+}
+
 
 def get_verification_config_store() -> ConfigStore:
     """Get the verification config store."""
@@ -199,10 +204,17 @@ def get_strategy_config_store() -> ConfigStore:
     return ConfigStore("strategy_config.json", STRATEGY_DEFAULTS)
 
 
+def get_agent_config_store() -> ConfigStore:
+    """Get the agent config store (model selection, etc.)."""
+    return ConfigStore("agent_config.json", AGENT_DEFAULTS)
+
+
 __all__ = [
     "ConfigStore",
     "get_verification_config_store",
     "get_strategy_config_store",
+    "get_agent_config_store",
     "VERIFICATION_DEFAULTS",
     "STRATEGY_DEFAULTS",
+    "AGENT_DEFAULTS",
 ]

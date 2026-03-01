@@ -1,21 +1,62 @@
 """Configuration management using Pydantic Settings."""
 
 from functools import lru_cache
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve .env relative to project root (directory containing src/), not CWD.
+# config.py lives at src/utils/config.py -> parent.parent = src, parent.parent.parent = project root.
+# This ensures the key is loaded whether the process is started from repo root,
+# frontend/, or any other directory (e.g. IDE, uvicorn from different cwd).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
+
+def _read_env_key(key: str) -> str:
+    """Read a single key from .env at project root (no extra deps). Used as fallback if pydantic didn't load it."""
+    if not _ENV_FILE.exists():
+        return ""
+    try:
+        for line in _ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            if k.strip() == key:
+                return v.strip().strip('"').strip("'").strip()
+    except OSError:
+        pass
+    return ""
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _inject_openai_key_from_env_file(cls, data: Any) -> Any:
+        """Prefer OPENAI_API_KEY from .env when present, so .env wins over stale/empty process env."""
+        if not isinstance(data, dict):
+            return data
+        from_env_file = _read_env_key("OPENAI_API_KEY") if _ENV_FILE.exists() else ""
+        # Prefer .env when it has a value so it wins over empty or stale process OPENAI_API_KEY
+        if from_env_file:
+            data = {**data, "openai_api_key": from_env_file}
+        # Prefer .env for use_mock_data so local .env wins over process env (e.g. USE_MOCK_DATA=true in shell)
+        use_mock_raw = _read_env_key("USE_MOCK_DATA") if _ENV_FILE.exists() else ""
+        if use_mock_raw:
+            data = {**data, "use_mock_data": use_mock_raw}
+        return data
 
     # Environment
     environment: Literal["development", "staging", "production"] = "development"
@@ -28,6 +69,13 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     openai_api_key: str = Field(default="", description="OpenAI API key (required)")
+
+    @field_validator("openai_api_key", mode="after")
+    @classmethod
+    def _strip_openai_key(cls, v: str) -> str:
+        """Strip whitespace so key from .env (e.g. trailing newline) is not sent to OpenAI."""
+        return (v or "").strip()
+
     anthropic_api_key: str = Field(default="", description="Anthropic API key (optional fallback)")
 
     # LangSmith Observability (new format)
@@ -41,6 +89,16 @@ class Settings(BaseSettings):
     ghostfolio_api_url: str = "http://localhost:3333"
     ghostfolio_access_token: str = Field(default="", description="Ghostfolio access token")
     use_mock_data: bool = False
+
+    @field_validator("use_mock_data", mode="before")
+    @classmethod
+    def _coerce_use_mock_data(cls, v: Any) -> bool:
+        """Ensure env string 'false'/'true' is parsed as bool (env vars are strings)."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "1", "yes")
+        return bool(v)
 
     # External APIs
     yahoo_finance_enabled: bool = True

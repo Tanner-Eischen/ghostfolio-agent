@@ -13,7 +13,7 @@ Task #15: Create FastAPI backend
 import ast
 import json
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -37,13 +37,20 @@ from src.utils.config import get_settings
 from src.utils.config_store import (
     get_verification_config_store,
     get_strategy_config_store,
+    get_agent_config_store,
 )
 from src.utils.langsmith_client import get_recent_runs, get_run_details
 from src.utils.logging import get_logger, setup_logging
 from src.utils.tracing import log_feedback, is_tracing_enabled
-from src.utils.usage_tracker import get_cost_by_run_id, get_cost_projections, get_usage_stats
+from src.utils.usage_tracker import (
+    get_cost_by_run_id,
+    get_cost_projections,
+    get_usage_stats,
+    calculate_cost,
+    seed_demo_usage,
+    MODEL_PRICING,
+)
 from src.repo.manager import (
-    ensure_git_on_path,
     get_repo_manager,
     RepoConnectionRequest,
     RepoConnection,
@@ -67,14 +74,29 @@ settings = get_settings()
 # Global agent instance
 _agent: GhostfolioAgent | None = None
 
+# Performance metrics (in-memory, reset on restart)
+_chat_request_count: int = 0
+_latency_samples: deque = deque(maxlen=100)
+
+
+def clear_agent() -> None:
+    """Clear the agent singleton so next get_agent() reinitializes (e.g. after model change)."""
+    global _agent
+    _agent = None
+
 
 def get_agent() -> GhostfolioAgent:
-    """Get or initialize the agent singleton."""
+    """Get or initialize the agent singleton. Uses model from agent config store."""
     global _agent
-    if _agent is None:
-        logger.info("Initializing GhostfolioAgent...")
+    store = get_agent_config_store()
+    model = store.get("model", "gpt-4o-mini")
+    if _agent is None or getattr(_agent.llm, "model_name", getattr(_agent.llm, "model", None)) != model:
+        if _agent is not None:
+            logger.info("Reinitializing agent with model=%s", model)
+        _agent = None
+        logger.info("Initializing GhostfolioAgent with model=%s...", model)
         _agent = GhostfolioAgent(
-            model="gpt-4o-mini",
+            model=model,
             temperature=0.0,
             use_verification=True,
             verification_strict_mode=False,
@@ -88,7 +110,7 @@ def get_agent() -> GhostfolioAgent:
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     setup_logging()
-    ensure_git_on_path()  # So repo connect (clone) can find git when not in shell PATH
+    # Git is only required when connecting a repo via URL (clone); repo/manager handles it then.
     logger.info(f"Starting Ghostfolio Agent API in {settings.environment} mode")
 
     # Pre-initialize agent on startup
@@ -112,12 +134,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Could not check Git at startup: %s", e)
 
-    # Production: auto-connect to REPO_URL if set and no connections exist
-    repo_url = (settings.repo_url or "").strip()
-    if repo_url and repo_url.startswith("http"):
-        try:
-            manager = get_repo_manager()
-            if len(manager.list_connections()) == 0:
+    # Auto-connect a repo so the developer page is never "Connect a repository" by default
+    try:
+        manager = get_repo_manager()
+        if len(manager.list_connections()) == 0:
+            repo_url = (settings.repo_url or "").strip()
+            if repo_url and repo_url.startswith("http"):
                 req = RepoConnectionRequest(
                     source=repo_url,
                     branch=(settings.repo_branch or "main").strip() or None,
@@ -127,8 +149,21 @@ async def lifespan(app: FastAPI):
                     logger.info("Auto-connected to production repo: %s", resp.connection.name)
                 else:
                     logger.warning("Auto-connect to REPO_URL failed: %s", getattr(resp, "error", "unknown"))
-        except Exception as e:
-            logger.warning("Auto-connect to REPO_URL failed: %s", e)
+            else:
+                # No REPO_URL set: connect to this project (ghostfolio-agent) as local path
+                project_root = Path(__file__).resolve().parent.parent.parent
+                req = RepoConnectionRequest(
+                    source=str(project_root),
+                    branch=(settings.repo_branch or "main").strip() or None,
+                    name=settings.repo_name or "ghostfolio-agent",
+                )
+                resp = await manager.connect(req)
+                if resp.success and resp.connection:
+                    logger.info("Auto-connected to project repo: %s", resp.connection.name)
+                else:
+                    logger.warning("Auto-connect to project path failed: %s", getattr(resp, "error", "unknown"))
+    except Exception as e:
+        logger.warning("Auto-connect repo failed: %s", e)
 
     yield
 
@@ -224,6 +259,20 @@ class PortfolioSummaryResponse(BaseModel):
     risk_level: str | None = Field(None, description="Risk level label")
 
 
+class SessionSummary(BaseModel):
+    """Summary of one session for listing."""
+
+    session_id: str = Field(..., description="Session identifier")
+    message_count: int = Field(..., description="Number of messages")
+    last_accessed: str | None = Field(None, description="ISO timestamp of last access")
+
+
+class SessionsListResponse(BaseModel):
+    """List of sessions (past conversations)."""
+
+    sessions: list[SessionSummary] = Field(default_factory=list, description="Sessions, most recent first")
+
+
 class SessionHistoryResponse(BaseModel):
     """Session history response."""
 
@@ -284,12 +333,70 @@ async def root() -> dict[str, str]:
         "version": "0.1.0",
         "docs": "/docs",
         "health": "/health",
+        "metrics": "/metrics",
     }
+
+
+@app.get("/metrics", tags=["System"])
+async def get_metrics() -> dict[str, Any]:
+    """Performance metrics (in-memory, reset on restart).
+
+    Returns chat request count and latency stats from the last N requests.
+    Use for lightweight performance monitoring without external infra.
+    """
+    global _chat_request_count, _latency_samples
+    samples = list(_latency_samples)
+    out = {
+        "chat_request_count": _chat_request_count,
+        "latency_sample_count": len(samples),
+    }
+    if samples:
+        sorted_ms = sorted(samples)
+        n = len(sorted_ms)
+        idx_p50 = min(int(n * 0.5), n - 1) if n else 0
+        idx_p95 = min(int(n * 0.95), n - 1) if n else 0
+        out["latency_p50_ms"] = round(sorted_ms[idx_p50], 2)
+        out["latency_p95_ms"] = round(sorted_ms[idx_p95], 2)
+        out["latency_avg_ms"] = round(sum(samples) / n, 2)
+    else:
+        out["latency_p50_ms"] = None
+        out["latency_p95_ms"] = None
+        out["latency_avg_ms"] = None
+    return out
 
 
 # ============================================================================
 # Chat Endpoints
 # ============================================================================
+
+
+def _chat_fallback_message(exc: Exception) -> str:
+    """Turn an exception into a short, conversational message for the user (no HTTP/tech jargon)."""
+    msg = str(exc).lower()
+    if "invalid_api_key" in msg or ("incorrect api key" in msg and "401" in str(exc)):
+        return (
+            "The OpenAI API key was rejected (invalid or expired). "
+            "Check your key at https://platform.openai.com/account/api-keys and update it in the server configuration."
+        )
+    if "api key" in msg or "openai" in msg:
+        return (
+            "I’m not fully set up yet—the API key for the assistant isn’t configured. "
+            "If you’re the person running this app, add the required key in the server configuration and try again."
+        )
+    if "authentication" in msg or "access token" in msg or ("401" in msg and "ghostfolio" in msg):
+        return (
+            "I can’t access your portfolio right now because the Ghostfolio connection isn’t set up or the access token is invalid. "
+            "Please add your Ghostfolio access token (from Ghostfolio → Settings → Security) in the configuration, then try again."
+        )
+    if "timeout" in msg or "timed out" in msg:
+        return "The request took too long and timed out. Please try again in a moment."
+    if "rate" in msg and "limit" in msg:
+        return "I’m hitting rate limits from an external service. Please wait a minute and try again."
+    # Generic friendly fallback
+    return (
+        "Something went wrong on my side while handling that. "
+        "You can try rephrasing or asking something else (for example: “What can you help me with?” or “How do I set up Ghostfolio?”)."
+    )
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
@@ -298,31 +405,27 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     Send a natural language query about your portfolio and receive
     an AI-powered response with confidence scoring and verification.
-
-    Args:
-        request: Chat request with message, optional session ID, and optional repo context
-
-    Returns:
-        Agent response with confidence, tool calls, and verification status
+    Always returns 200 with a conversational message (never 400/500 to the client).
     """
+    session_id = request.session_id or str(uuid.uuid4())
     try:
         agent = get_agent()
-
-        # Generate session ID if not provided
-        session_id = request.session_id or str(uuid.uuid4())
-
-        # Build context with repo_id if provided
         context = {}
         if request.repo_id:
             context["repo_id"] = request.repo_id
 
-        # Call agent
         result = await agent.chat_with_context(
             message=request.message,
             session_id=session_id,
             user_id=request.user_id,
             context=context if context else None,
         )
+
+        global _chat_request_count, _latency_samples
+        _chat_request_count += 1
+        pt_ms = result.get("metadata", {}).get("processing_time_ms")
+        if pt_ms is not None:
+            _latency_samples.append(float(pt_ms))
 
         return ChatResponse(
             response=result["message"],
@@ -339,10 +442,20 @@ async def chat(request: ChatRequest) -> ChatResponse:
         )
 
     except Exception as e:
-        logger.error(f"Chat error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Agent error: {str(e)}",
+        logger.exception("Chat error: %s", e)
+        friendly = _chat_fallback_message(e)
+        return ChatResponse(
+            response=friendly,
+            confidence=0.0,
+            confidence_level="VERY_LOW",
+            tool_calls=[],
+            tool_outputs=[],
+            session_id=session_id,
+            verification_passed=False,
+            requires_escalation=True,
+            processing_time_ms=0.0,
+            run_id=None,
+            trace_url=None,
         )
 
 
@@ -356,9 +469,78 @@ async def list_tools() -> list[dict[str, str]]:
     return agent.get_tool_descriptions()
 
 
+# Allowed LLM models for agent (OpenAI models supported by ChatOpenAI)
+ALLOWED_AGENT_MODELS = [
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4-turbo",
+    "gpt-4",
+    "gpt-3.5-turbo",
+]
+
+
+class AgentConfigResponse(BaseModel):
+    """Agent configuration response."""
+
+    model: str = Field(..., description="Current LLM model id (e.g. gpt-4o-mini)")
+    allowed_models: list[str] = Field(
+        default_factory=lambda: ALLOWED_AGENT_MODELS.copy(),
+        description="Model ids that can be selected",
+    )
+
+
+class AgentConfigRequest(BaseModel):
+    """Agent configuration update request."""
+
+    model: str = Field(..., description="LLM model id to use")
+
+
+@app.get("/agent/config", response_model=AgentConfigResponse, tags=["Agent"])
+async def get_agent_config() -> AgentConfigResponse:
+    """Get current agent configuration (e.g. selected model). For developers."""
+    store = get_agent_config_store()
+    model = store.get("model", "gpt-4o-mini")
+    return AgentConfigResponse(model=model, allowed_models=ALLOWED_AGENT_MODELS)
+
+
+@app.put("/agent/config", response_model=AgentConfigResponse, tags=["Agent"])
+async def put_agent_config(request: AgentConfigRequest) -> AgentConfigResponse:
+    """Update agent configuration (e.g. switch model). Agent is reinitialized on next chat. For developers."""
+    model = request.model.strip().lower().replace("_", "-")
+    if model not in ALLOWED_AGENT_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model must be one of: {', '.join(ALLOWED_AGENT_MODELS)}",
+        )
+    store = get_agent_config_store()
+    store.set("model", model)
+    clear_agent()
+    logger.info("Agent config updated: model=%s", model)
+    return AgentConfigResponse(model=model, allowed_models=ALLOWED_AGENT_MODELS)
+
+
 # ============================================================================
 # Session Management Endpoints
 # ============================================================================
+
+
+@app.get("/sessions", response_model=SessionsListResponse, tags=["Sessions"])
+async def list_sessions() -> SessionsListResponse:
+    """List all conversation sessions (past conversations).
+
+    Returns sessions with message count and last accessed time, most recent first.
+    """
+    agent = get_agent()
+    raw = agent.list_sessions()
+    sessions = [
+        SessionSummary(
+            session_id=s["session_id"],
+            message_count=s["message_count"],
+            last_accessed=s.get("last_accessed"),
+        )
+        for s in raw
+    ]
+    return SessionsListResponse(sessions=sessions)
 
 
 @app.get("/sessions/{session_id}", response_model=SessionHistoryResponse, tags=["Sessions"])
@@ -372,17 +554,22 @@ async def get_session_history(session_id: str) -> SessionHistoryResponse:
         Session history with message count
     """
     agent = get_agent()
-
-    # Access internal history (agent stores this)
-    history = agent._conversation_history.get(session_id, [])
+    history = agent.get_session_history(session_id)
 
     messages = []
     for msg in history:
-        role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
-        messages.append({
-            "role": role,
-            "content": msg.content,
-        })
+        name = msg.__class__.__name__
+        if name == "HumanMessage":
+            role = "user"
+        elif name == "AIMessage":
+            role = "assistant"
+        else:
+            # Skip ToolMessage for display (keep thread user/assistant only)
+            continue
+        content = getattr(msg, "content", "") or ""
+        if isinstance(content, list):
+            content = str(content)
+        messages.append({"role": role, "content": content})
 
     return SessionHistoryResponse(
         session_id=session_id,
@@ -1968,9 +2155,21 @@ async def get_injection_points(repo_id: str, limit: int = 10) -> InjectionPoints
             route_path=route_path or "/",
         ))
 
+    skip_parts = (".git", "node_modules", ".venv", "venv", "__pycache__", ".idea", ".vscode", "dist", "build")
+
+    def should_skip(path: Path) -> bool:
+        try:
+            rel = path.relative_to(repo_path)
+        except ValueError:
+            return True
+        parts = rel.parts
+        return any(p in skip_parts for p in parts)
+
     for py_file in repo_path.rglob("*.py"):
         if len(points) >= limit:
             break
+        if should_skip(py_file):
+            continue
         try:
             content = py_file.read_text(encoding="utf-8")
             lines = content.split("\n")
@@ -1990,6 +2189,8 @@ async def get_injection_points(repo_id: str, limit: int = 10) -> InjectionPoints
     for ts_file in repo_path.rglob("*.ts"):
         if len(points) >= limit:
             break
+        if should_skip(ts_file):
+            continue
         if ".spec." in ts_file.name or ".test." in ts_file.name:
             continue
         try:
@@ -3106,6 +3307,119 @@ async def get_cost_projections_endpoint(queries_per_day: int = Query(default=100
         monthly_cost=projections["monthly_cost"],
         projected_annual=projections["projected_annual"],
         cost_breakdown=projections["cost_breakdown"],
+    )
+
+
+class ModelPricingEntry(BaseModel):
+    """Pricing for one model (USD per 1M tokens)."""
+
+    input_per_1m: float = Field(..., description="Input price per 1M tokens")
+    output_per_1m: float = Field(..., description="Output price per 1M tokens")
+
+
+class ModelPricingResponse(BaseModel):
+    """Model pricing for cost comparison."""
+
+    models: dict[str, ModelPricingEntry] = Field(..., description="Model id -> pricing")
+
+
+@app.get("/finances/model-pricing", response_model=ModelPricingResponse, tags=["Finances"])
+async def get_model_pricing() -> ModelPricingResponse:
+    """Get pricing per model (USD per 1M tokens). For cost comparison UI."""
+    models = {
+        mid: ModelPricingEntry(input_per_1m=p["input"], output_per_1m=p["output"])
+        for mid, p in MODEL_PRICING.items()
+    }
+    return ModelPricingResponse(models=models)
+
+
+class CostComparisonEntry(BaseModel):
+    """Cost comparison row for one model."""
+
+    model_id: str = Field(..., description="Model id")
+    label: str = Field(..., description="Display label")
+    input_per_1m: float = Field(..., description="Input $/1M tokens")
+    output_per_1m: float = Field(..., description="Output $/1M tokens")
+    cost_per_query: float = Field(..., description="Est. cost per query at default token mix")
+    monthly_cost: float = Field(..., description="Est. monthly cost at given queries/day")
+
+
+class CostComparisonResponse(BaseModel):
+    """Cost comparison across models."""
+
+    queries_per_day: int = Field(..., description="Queries per day used for projection")
+    avg_tokens_per_query: int = Field(..., description="Avg tokens per query assumption")
+    input_ratio_pct: int = Field(..., description="Input token ratio (0-100)")
+    models: list[CostComparisonEntry] = Field(..., description="Per-model comparison")
+
+
+def _model_display_label(model_id: str) -> str:
+    """Human-readable label for model id."""
+    labels = {
+        "gpt-4o-mini": "GPT-4o Mini",
+        "gpt-4o": "GPT-4o",
+        "gpt-4-turbo": "GPT-4 Turbo",
+        "gpt-4": "GPT-4",
+        "gpt-3.5-turbo": "GPT-3.5 Turbo",
+        "claude-3-opus": "Claude 3 Opus",
+        "claude-3-sonnet": "Claude 3 Sonnet",
+        "claude-3-haiku": "Claude 3 Haiku",
+    }
+    return labels.get(model_id, model_id)
+
+
+class SeedDemoUsageResponse(BaseModel):
+    """Response after seeding demo usage."""
+
+    entries_added: int = Field(..., description="Number of usage log entries added")
+    models: int = Field(..., description="Number of models that received entries")
+
+
+@app.post("/finances/seed-demo-usage", response_model=SeedDemoUsageResponse, tags=["Finances"])
+async def post_seed_demo_usage(
+    entries_per_model: int = Query(default=12, ge=1, le=50),
+    days_back: int = Query(default=3, ge=1, le=30),
+) -> SeedDemoUsageResponse:
+    """Seed the usage log with synthetic entries for all models. For demo/observability only."""
+    total = seed_demo_usage(entries_per_model=entries_per_model, days_back=days_back)
+    return SeedDemoUsageResponse(
+        entries_added=total,
+        models=len(MODEL_PRICING),
+    )
+
+
+@app.get("/finances/cost-comparison", response_model=CostComparisonResponse, tags=["Finances"])
+async def get_cost_comparison(
+    queries_per_day: int = Query(default=100, ge=1, le=100000),
+    avg_tokens_per_query: int = Query(default=500, ge=100, le=10000),
+    input_ratio_pct: int = Query(default=60, ge=0, le=100),
+) -> CostComparisonResponse:
+    """Get cost comparison across models for given query volume. For Observability page."""
+    input_ratio = input_ratio_pct / 100.0
+    input_tokens = int(avg_tokens_per_query * input_ratio)
+    output_tokens = avg_tokens_per_query - input_tokens
+    entries: list[CostComparisonEntry] = []
+    for model_id, pricing in MODEL_PRICING.items():
+        cost_per_query = calculate_cost(input_tokens, output_tokens, model_id)
+        daily_cost = cost_per_query * queries_per_day
+        monthly_cost = daily_cost * 30
+        entries.append(
+            CostComparisonEntry(
+                model_id=model_id,
+                label=_model_display_label(model_id),
+                input_per_1m=pricing["input"],
+                output_per_1m=pricing["output"],
+                cost_per_query=round(cost_per_query, 6),
+                monthly_cost=round(monthly_cost, 2),
+            )
+        )
+    # Sort by monthly cost ascending
+    entries.sort(key=lambda e: e.monthly_cost)
+    return CostComparisonResponse(
+        queries_per_day=queries_per_day,
+        avg_tokens_per_query=avg_tokens_per_query,
+        input_ratio_pct=input_ratio_pct,
+        models=entries,
     )
 
 

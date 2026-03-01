@@ -160,10 +160,15 @@ class YahooFinanceClient:
 
         self._client = httpx.AsyncClient(
             base_url=self.BASE_URL,
-            timeout=10.0,
+            timeout=httpx.Timeout(10.0, connect=5.0),
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             },
+            limits=httpx.Limits(
+                max_keepalive_connections=6,
+                max_connections=12,
+                keepalive_expiry=20.0,
+            ),
         )
 
         logger.info(f"YahooFinanceClient initialized (mock={self._use_mock})")

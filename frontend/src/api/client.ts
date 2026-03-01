@@ -26,8 +26,23 @@ async function fetchApi<T>(endpoint: string, options: ApiOptions = {}): Promise<
   const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+    const text = await response.text();
+    let detail: string | undefined;
+    try {
+      const json = text ? JSON.parse(text) : {};
+      const d = json.detail;
+      if (typeof d === 'string') detail = d;
+      else if (Array.isArray(d) && d[0]?.msg) detail = d.map((e: { msg?: string }) => e.msg).join('; ');
+      else if (d && typeof d === 'object' && 'msg' in d) detail = (d as { msg: string }).msg;
+      else if (d != null && typeof d === 'object') detail = JSON.stringify(d).slice(0, 300);
+    } catch {
+      detail = text?.slice(0, 200) || response.statusText || undefined;
+    }
+    const fallback =
+      response.status >= 500
+        ? 'Server error. Check backend logs or try again.'
+        : `Request failed (${response.status}).`;
+    throw new Error(detail || fallback);
   }
 
   return response.json();
@@ -104,6 +119,12 @@ export const portfolioApi = {
 };
 
 // Sessions API
+export interface SessionSummary {
+  session_id: string;
+  message_count: number;
+  last_accessed: string | null;
+}
+
 export interface SessionHistory {
   session_id: string;
   message_count: number;
@@ -114,6 +135,7 @@ export interface SessionHistory {
 }
 
 export const sessionsApi = {
+  list: () => fetchApi<{ sessions: SessionSummary[] }>('/sessions'),
   get: (sessionId: string) => fetchApi<SessionHistory>(`/sessions/${sessionId}`),
   clear: (sessionId: string) => fetchApi<{ cleared: boolean }>(`/sessions/${sessionId}`, { method: 'DELETE' }),
 };
@@ -464,10 +486,58 @@ export interface CostProjections {
   };
 }
 
+export interface CostComparisonEntry {
+  model_id: string;
+  label: string;
+  input_per_1m: number;
+  output_per_1m: number;
+  cost_per_query: number;
+  monthly_cost: number;
+}
+
+export interface CostComparison {
+  queries_per_day: number;
+  avg_tokens_per_query: number;
+  input_ratio_pct: number;
+  models: CostComparisonEntry[];
+}
+
+export interface SeedDemoUsageResponse {
+  entries_added: number;
+  models: number;
+}
+
 export const financesApi = {
   getUsage: () => fetchApi<UsageStats>('/finances/usage'),
   getProjections: (queriesPerDay?: number) =>
     fetchApi<CostProjections>(`/finances/projections${queriesPerDay ? `?queries_per_day=${queriesPerDay}` : ''}`),
+  getCostComparison: (opts?: { queries_per_day?: number; avg_tokens_per_query?: number; input_ratio_pct?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.queries_per_day != null) params.set('queries_per_day', String(opts.queries_per_day));
+    if (opts?.avg_tokens_per_query != null) params.set('avg_tokens_per_query', String(opts.avg_tokens_per_query));
+    if (opts?.input_ratio_pct != null) params.set('input_ratio_pct', String(opts.input_ratio_pct));
+    const qs = params.toString();
+    return fetchApi<CostComparison>(`/finances/cost-comparison${qs ? `?${qs}` : ''}`);
+  },
+  seedDemoUsage: (opts?: { entries_per_model?: number; days_back?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.entries_per_model != null) params.set('entries_per_model', String(opts.entries_per_model));
+    if (opts?.days_back != null) params.set('days_back', String(opts.days_back));
+    const qs = params.toString();
+    return fetchApi<SeedDemoUsageResponse>(`/finances/seed-demo-usage${qs ? `?${qs}` : ''}`, { method: 'POST' });
+  },
+};
+
+// Agent config API (developer: switch model)
+export interface AgentConfig {
+  model: string;
+  allowed_models?: string[];
+}
+
+export const agentApi = {
+  getConfig: () => fetchApi<AgentConfig>('/agent/config'),
+  putConfig: (config: { model: string }) =>
+    fetchApi<AgentConfig>('/agent/config', { method: 'PUT', body: config }),
 };
 
 // Tool Suggestions API (Page 2 - Tool Library)

@@ -22,7 +22,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +47,17 @@ X_MARK = "[red]FAIL[/red]"
 
 # Eval case directory
 EVAL_CASES_DIR = Path(__file__).parent / "eval_cases"
+
+
+@dataclass
+class EvalConfig:
+    """Configuration for eval execution, mirrors VerificationConfig."""
+    fact_checking: bool = True
+    hallucination_detection: bool = True
+    confidence_scoring: bool = True
+    hitl_enabled: bool = False
+    confidence_threshold: int = 70
+    strict_mode: bool = False  # If True, fail tests on low confidence
 
 
 @dataclass
@@ -99,6 +110,8 @@ class EvalResult:
     checks: dict[str, bool] = field(default_factory=dict)
     criteria_results: list[EvalCriterion] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)
+    feedback_adjusted: bool = False
+    feedback_info: dict[str, Any] = field(default_factory=dict)
 
     @property
     def case_id(self) -> str:
@@ -122,6 +135,14 @@ class EvalReport:
     average_confidence: float = 0.0
     average_response_time_ms: float = 0.0
     total_duration_s: float = 0.0
+    config_used: dict[str, Any] = field(default_factory=dict)
+    feedback_stats: dict[str, Any] = field(default_factory=dict)
+    # Performance: single-tool vs multi-step latency (G4 targets: <5s single, <15s multi)
+    avg_response_time_ms_single_tool: float = 0.0
+    avg_response_time_ms_multi_step: float = 0.0
+    # Tool success: cases where every tool call had a corresponding output
+    tool_success_count: int = 0
+    tool_total_count: int = 0
 
     @property
     def pass_rate(self) -> float:
@@ -129,6 +150,13 @@ class EvalReport:
         if self.total_tests == 0:
             return 0.0
         return (self.passed / self.total_tests) * 100
+
+    @property
+    def tool_success_rate(self) -> float:
+        """Tool success rate (0-100)."""
+        if self.tool_total_count == 0:
+            return 100.0
+        return (self.tool_success_count / self.tool_total_count) * 100
 
 
 def evaluate_criterion(
@@ -189,6 +217,223 @@ def evaluate_criterion(
                         break
                 criterion.actual = found
                 criterion.passed = found
+
+        elif criterion.check_type == "tool_not_called":
+            criterion.actual = tool_calls
+            criterion.passed = criterion.expected not in tool_calls
+
+        elif criterion.check_type == "field_matches":
+            # Expected: {"field": "total_value", "value": 150000, "tolerance": 0.01}
+            tool_outputs = response.get("tool_outputs", [])
+            expected = criterion.expected if isinstance(criterion.expected, dict) else {}
+            field_name = expected.get("field", "")
+            expected_value = expected.get("value")
+            tolerance = expected.get("tolerance", 0.0)
+
+            # Search for field in tool_outputs
+            actual_value = None
+            found = False
+            for obj in tool_outputs:
+                if isinstance(obj, dict) and field_name in obj:
+                    actual_value = obj[field_name]
+                    found = True
+                    break
+
+            if not found:
+                criterion.actual = None
+                criterion.passed = False
+                criterion.error = f"Field '{field_name}' not found in tool_outputs"
+            else:
+                criterion.actual = actual_value
+                if tolerance > 0 and isinstance(actual_value, (int, float)) and isinstance(expected_value, (int, float)):
+                    # Tolerance-based comparison
+                    lower = expected_value * (1 - tolerance)
+                    upper = expected_value * (1 + tolerance)
+                    criterion.passed = lower <= actual_value <= upper
+                else:
+                    # Exact match
+                    criterion.passed = actual_value == expected_value
+
+        elif criterion.check_type == "value_in_range":
+            # Expected: {"field": "confidence", "min": 0, "max": 100}
+            tool_outputs = response.get("tool_outputs", [])
+            expected = criterion.expected if isinstance(criterion.expected, dict) else {}
+            field_name = expected.get("field", "")
+            min_val = expected.get("min")
+            max_val = expected.get("max")
+
+            # For confidence, use top-level response field
+            if field_name == "confidence":
+                actual_value = confidence
+            else:
+                # Search for field in tool_outputs
+                actual_value = None
+                for obj in tool_outputs:
+                    if isinstance(obj, dict) and field_name in obj:
+                        actual_value = obj[field_name]
+                        break
+
+            criterion.actual = actual_value
+            if actual_value is None:
+                criterion.passed = False
+                criterion.error = f"Field '{field_name}' not found"
+            else:
+                try:
+                    actual_num = float(actual_value)
+                    in_range = True
+                    if min_val is not None:
+                        in_range = in_range and actual_num >= min_val
+                    if max_val is not None:
+                        in_range = in_range and actual_num <= max_val
+                    criterion.passed = in_range
+                except (ValueError, TypeError):
+                    criterion.passed = False
+                    criterion.error = f"Could not convert '{actual_value}' to number"
+
+        elif criterion.check_type == "timestamp_fresh":
+            # Expected: {"field": "timestamp", "max_age_seconds": 86400}
+            tool_outputs = response.get("tool_outputs", [])
+            expected = criterion.expected if isinstance(criterion.expected, dict) else {}
+            field_name = expected.get("field", "timestamp")
+            max_age_seconds = expected.get("max_age_seconds", 86400)
+
+            # Search for timestamp field
+            timestamp_value = None
+            for obj in tool_outputs:
+                if isinstance(obj, dict) and field_name in obj:
+                    timestamp_value = obj[field_name]
+                    break
+
+            criterion.actual = timestamp_value
+            if timestamp_value is None:
+                criterion.passed = False
+                criterion.error = f"Timestamp field '{field_name}' not found"
+            else:
+                try:
+                    # Parse timestamp (ISO format expected)
+                    if isinstance(timestamp_value, str):
+                        ts = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
+                    elif isinstance(timestamp_value, (int, float)):
+                        ts = datetime.fromtimestamp(timestamp_value, tz=timezone.utc)
+                    else:
+                        ts = timestamp_value
+
+                    now = datetime.now(timezone.utc)
+                    age_seconds = (now - ts).total_seconds()
+                    criterion.passed = age_seconds <= max_age_seconds
+                    criterion.actual = f"{age_seconds:.0f}s old (max: {max_age_seconds}s)"
+                except (ValueError, TypeError) as e:
+                    criterion.passed = False
+                    criterion.error = f"Could not parse timestamp: {e}"
+
+        elif criterion.check_type == "not_contains":
+            # Expected: string or list of strings that should NOT appear in response
+            forbidden = criterion.expected
+            if isinstance(forbidden, str):
+                forbidden = [forbidden]
+
+            response_text = response.get("message", "")
+            found_forbidden = []
+            for term in forbidden:
+                if term.lower() in response_text.lower():
+                    found_forbidden.append(term)
+
+            criterion.actual = found_forbidden if found_forbidden else "none"
+            criterion.passed = len(found_forbidden) == 0
+
+        elif criterion.check_type == "verification_gate":
+            # Expected: {"gate_name": "syntactic", "output_type": "portfolio"}
+            # Runs a single verification gate check on tool_outputs
+            from evals.verification_evaluator import VerificationEvaluator
+
+            expected = criterion.expected if isinstance(criterion.expected, dict) else {}
+            gate_name = expected.get("gate_name", "syntactic")
+            output_type = expected.get("output_type", "general")
+
+            tool_outputs = response.get("tool_outputs", [])
+            if not tool_outputs:
+                criterion.actual = "No tool outputs to verify"
+                criterion.passed = False
+            else:
+                # Run verification on first tool output
+                evaluator = VerificationEvaluator()
+                output_to_check = tool_outputs[0] if isinstance(tool_outputs[0], dict) else {}
+
+                try:
+                    verdict = evaluator.evaluate_output(output_to_check, output_type)
+                    gate_result = verdict.gates.get(gate_name)
+
+                    if gate_result:
+                        criterion.passed = gate_result.passed
+                        criterion.actual = f"Gate '{gate_name}': {gate_result.evidence}"
+                        if not gate_result.passed:
+                            criterion.error = "; ".join(gate_result.remediation)
+                    else:
+                        criterion.passed = False
+                        criterion.error = f"Gate '{gate_name}' not found in verdict"
+                        criterion.actual = f"Available gates: {list(verdict.gates.keys())}"
+                except Exception as e:
+                    criterion.passed = False
+                    criterion.error = f"Verification failed: {e}"
+                    criterion.actual = "Evaluator error"
+
+        elif criterion.check_type == "response_time_ms":
+            # Expected: max allowed ms (e.g. 5000). Pass if response_time_ms <= expected.
+            max_ms = criterion.expected
+            if isinstance(max_ms, dict):
+                max_ms = max_ms.get("max_ms", max_ms.get("max", 0))
+            criterion.actual = response_time_ms
+            criterion.passed = response_time_ms <= float(max_ms)
+
+        elif criterion.check_type == "confidence_min":
+            # Expected: minimum confidence (0-100). Pass if confidence >= expected.
+            min_conf = criterion.expected
+            if isinstance(min_conf, dict):
+                min_conf = min_conf.get("min_confidence", min_conf.get("min", 0))
+            criterion.actual = confidence
+            criterion.passed = confidence >= float(min_conf)
+
+        elif criterion.check_type == "verification_verdict":
+            # Expected: {"output_type": "portfolio", "min_confidence": 0.5}
+            # Runs full 4-gate verification and checks overall verdict
+            from evals.verification_evaluator import VerificationEvaluator
+
+            expected = criterion.expected if isinstance(criterion.expected, dict) else {}
+            output_type = expected.get("output_type", "general")
+            min_confidence = expected.get("min_confidence", 0.5)
+            require_all_gates = expected.get("require_all_gates", False)
+
+            tool_outputs = response.get("tool_outputs", [])
+            if not tool_outputs:
+                criterion.actual = "No tool outputs to verify"
+                criterion.passed = False
+            else:
+                evaluator = VerificationEvaluator()
+                output_to_check = tool_outputs[0] if isinstance(tool_outputs[0], dict) else {}
+
+                try:
+                    verdict = evaluator.evaluate_output(output_to_check, output_type)
+
+                    passed_gates = verdict.passed_count
+                    total_gates = len(verdict.gates)
+
+                    if require_all_gates:
+                        criterion.passed = verdict.all_passed
+                    else:
+                        criterion.passed = verdict.confidence_score >= min_confidence
+
+                    criterion.actual = (
+                        f"Confidence: {verdict.confidence_score:.2f}, "
+                        f"Gates: {passed_gates}/{total_gates}, "
+                        f"Action: {verdict.recommended_action}"
+                    )
+
+                    if not criterion.passed:
+                        criterion.error = "; ".join(verdict.remediation_steps[:3])  # Top 3 remediation steps
+                except Exception as e:
+                    criterion.passed = False
+                    criterion.error = f"Verification failed: {e}"
+                    criterion.actual = "Evaluator error"
 
         else:
             criterion.actual = f"Unknown check_type: {criterion.check_type}"
@@ -257,7 +502,19 @@ def validate_eval_cases(eval_cases: list[EvalCase]) -> list[str]:
     errors = []
     seen_ids = set()
 
-    valid_check_types = ["tool_called", "field_present"]
+    valid_check_types = [
+        "tool_called",
+        "tool_not_called",
+        "field_present",
+        "field_matches",
+        "value_in_range",
+        "timestamp_fresh",
+        "not_contains",
+        "verification_gate",
+        "verification_verdict",
+        "response_time_ms",
+        "confidence_min",
+    ]
 
     for ec in eval_cases:
         # Check for duplicate IDs
@@ -273,10 +530,7 @@ def validate_eval_cases(eval_cases: list[EvalCase]) -> list[str]:
         if ec.input is None:
             errors.append(f"Eval case {ec.id}: missing 'input' field")
 
-        # Validate criteria
-        if not ec.criteria:
-            errors.append(f"Eval case {ec.id}: missing 'criteria'")
-
+        # Validate criteria (empty criteria is valid for edge cases with no expected tools)
         for i, crit in enumerate(ec.criteria):
             if "id" not in crit:
                 errors.append(f"Eval case {ec.id}: criterion {i} missing 'id'")
@@ -343,6 +597,36 @@ async def run_single_eval(agent, eval_case: EvalCase) -> EvalResult:
 
         result.passed = all_passed
 
+        # Check for linked feedback and apply adjustment
+        try:
+            from evals.feedback_eval_bridge import adjust_score_by_feedback, get_feedback_for_eval_case
+
+            feedback_entries = get_feedback_for_eval_case(eval_case.id)
+            if feedback_entries:
+                # Calculate base score from criteria
+                passed_criteria = sum(1 for c in result.criteria_results if c.passed)
+                total_criteria = len(result.criteria_results)
+                base_score = passed_criteria / total_criteria if total_criteria > 0 else 0.0
+
+                # Adjust score by feedback
+                adjusted = adjust_score_by_feedback(
+                    base_score,
+                    eval_case_id=eval_case.id,
+                    session_id=f"eval-{eval_case.id}",
+                )
+
+                result.feedback_adjusted = adjusted.feedback_count > 0
+                result.feedback_info = adjusted.to_dict()
+
+                # If feedback is strongly negative, mark as failed
+                if adjusted.negative_count > adjusted.positive_count:
+                    result.passed = False
+                    result.errors.append(f"Negative feedback outweighs positive ({adjusted.negative_count} vs {adjusted.positive_count})")
+
+        except Exception as e:
+            # Don't fail the eval if feedback adjustment fails
+            result.feedback_info = {"error": str(e)}
+
     except Exception as e:
         result.errors.append(str(e))
         result.passed = False
@@ -355,6 +639,7 @@ async def run_evaluations(
     eval_cases: list[EvalCase],
     verbose: bool = False,
     dry_run: bool = False,
+    config: EvalConfig | None = None,
 ) -> EvalReport:
     """Run all eval cases and generate report.
 
@@ -362,6 +647,7 @@ async def run_evaluations(
         eval_cases: List of eval cases to run
         verbose: Whether to print detailed output
         dry_run: If True, don't actually run tests (just validate)
+        config: Optional eval configuration. If None, loads from verification config store.
 
     Returns:
         EvalReport with results
@@ -375,6 +661,35 @@ async def run_evaluations(
         console.print("[yellow]Dry run mode - not executing tests[/yellow]")
         return report
 
+    # Load config from store if not provided
+    if config is None:
+        try:
+            from src.utils.config_store import get_verification_config_store
+            store = get_verification_config_store()
+            stored = store.get_all()
+            config = EvalConfig(
+                fact_checking=stored.get("fact_checking", True),
+                hallucination_detection=stored.get("hallucination_detection", True),
+                confidence_scoring=stored.get("confidence_scoring", True),
+                hitl_enabled=stored.get("hitl_enabled", False),
+                confidence_threshold=stored.get("confidence_threshold", 70),
+                strict_mode=False,
+            )
+            console.print("[dim]Loaded config from verification config store[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]Could not load config store: {e}. Using defaults.[/yellow]")
+            config = EvalConfig()
+
+    # Store config in report metadata
+    report.config_used = {
+        "fact_checking": config.fact_checking,
+        "hallucination_detection": config.hallucination_detection,
+        "confidence_scoring": config.confidence_scoring,
+        "hitl_enabled": config.hitl_enabled,
+        "confidence_threshold": config.confidence_threshold,
+        "strict_mode": config.strict_mode,
+    }
+
     # Import agent here to avoid issues if dependencies missing
     try:
         from src.agent import GhostfolioAgent
@@ -384,9 +699,11 @@ async def run_evaluations(
         sys.exit(1)
 
     console.print(f"\n[bold]Initializing Ghostfolio Agent...[/bold]")
+    console.print(f"[dim]Config: fact_checking={config.fact_checking}, hitl={config.hitl_enabled}, threshold={config.confidence_threshold}%[/dim]")
+
     agent = GhostfolioAgent(
-        use_verification=True,
-        verification_strict_mode=False,
+        use_verification=config.fact_checking,
+        verification_strict_mode=config.strict_mode,
     )
 
     start_time = time.time()
@@ -440,6 +757,32 @@ async def run_evaluations(
         report.average_response_time_ms = sum(r.response_time_ms for r in report.results) / len(report.results)
         report.average_confidence = sum(r.confidence for r in report.results) / len(report.results)
 
+        # Latency breakdown: single-tool vs multi-step (G4: <5s single, <15s multi)
+        single_tool_times = [
+            r.response_time_ms for r in report.results
+            if len(r.eval_case.expected_tool_calls) == 1
+        ]
+        multi_step_times = [
+            r.response_time_ms for r in report.results
+            if len(r.eval_case.expected_tool_calls) >= 2
+        ]
+        if single_tool_times:
+            report.avg_response_time_ms_single_tool = sum(single_tool_times) / len(single_tool_times)
+        if multi_step_times:
+            report.avg_response_time_ms_multi_step = sum(multi_step_times) / len(multi_step_times)
+
+        # Tool success rate: each result contributes 1 if all tool calls have outputs, else 0
+        for r in report.results:
+            tool_calls = r.details.get("tool_calls", [])
+            tool_outputs = r.details.get("tool_outputs", [])
+            if not tool_calls:
+                report.tool_total_count += 1
+                report.tool_success_count += 1  # no tools = success
+            else:
+                report.tool_total_count += 1
+                if not r.errors and len(tool_outputs) >= len(tool_calls):
+                    report.tool_success_count += 1
+
     return report
 
 
@@ -459,6 +802,9 @@ def print_report(report: EvalReport, verbose: bool = False):
         f"[red]Failed: {report.failed}[/red]\n"
         f"Pass Rate: {report.pass_rate:.1f}%\n\n"
         f"Avg Response Time: {report.average_response_time_ms:.0f}ms\n"
+        f"Avg single-tool: {report.avg_response_time_ms_single_tool:.0f}ms | "
+        f"Avg multi-step: {report.avg_response_time_ms_multi_step:.0f}ms\n"
+        f"Tool Success: {report.tool_success_count}/{report.tool_total_count} ({report.tool_success_rate:.0f}%)\n"
         f"Avg Confidence: {report.average_confidence:.1f}%\n"
         f"Total Duration: {report.total_duration_s:.1f}s"
     )
@@ -557,6 +903,8 @@ def save_report(report: EvalReport, output_path: str | None = None):
     # Convert report to dict
     report_dict = {
         "timestamp": report.timestamp,
+        "config_used": report.config_used,
+        "feedback_stats": report.feedback_stats,
         "summary": {
             "total_tests": report.total_tests,
             "passed": report.passed,
@@ -565,6 +913,11 @@ def save_report(report: EvalReport, output_path: str | None = None):
             "pass_rate": report.pass_rate,
             "average_confidence": report.average_confidence,
             "average_response_time_ms": report.average_response_time_ms,
+            "avg_response_time_ms_single_tool": report.avg_response_time_ms_single_tool,
+            "avg_response_time_ms_multi_step": report.avg_response_time_ms_multi_step,
+            "tool_success_count": report.tool_success_count,
+            "tool_total_count": report.tool_total_count,
+            "tool_success_rate": report.tool_success_rate,
             "total_duration_s": report.total_duration_s,
         },
         "category_summary": report.category_summary,
@@ -596,6 +949,8 @@ def save_report(report: EvalReport, output_path: str | None = None):
                     for c in r.criteria_results
                 ],
                 "errors": r.errors,
+                "feedback_adjusted": r.feedback_adjusted,
+                "feedback_info": r.feedback_info,
             }
             for r in report.results
         ],

@@ -767,5 +767,76 @@
       {"id": "C1", "description": "risk_assessment tool was called", "check_type": "tool_called", "expected": "risk_assessment"},
       {"id": "C2", "description": "Full verification verdict passes (min 50% confidence)", "check_type": "verification_verdict", "expected": {"output_type": "risk", "min_confidence": 0.5}}
     ]
+  },
+
+  {
+    "id": "MVP-070",
+    "category": "edge_case",
+    "input": "I would really like to know what my total portfolio value is right now because I am planning my budget for the next quarter and need to understand my current financial position before making any decisions. Could you please pull up my portfolio summary and tell me the total value and maybe a quick breakdown of my top holdings? I have been checking this every week. ",
+    "description": "Very long query should still route to portfolio_analysis",
+    "expected_tool_calls": ["portfolio_analysis"],
+    "expected_output_fields": ["total_value", "holdings"],
+    "criteria": [
+      {"id": "C1", "description": "portfolio_analysis tool was called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+      {"id": "C2", "description": "Response includes total_value in tool output", "check_type": "field_present", "expected": "total_value"}
+    ]
+  },
+  {
+    "id": "MVP-071",
+    "category": "edge_case",
+    "input": "wat is my portfolo wroth and how divercified am i",
+    "description": "Typo-heavy financial terms should still trigger portfolio and risk tools",
+    "expected_tool_calls": ["portfolio_analysis"],
+    "expected_output_fields": ["total_value"],
+    "criteria": [
+      {"id": "C1", "description": "portfolio_analysis tool was called", "check_type": "tool_called", "expected": "portfolio_analysis"}
+    ]
+  },
+  {
+    "id": "MVP-072",
+    "category": "edge_case",
+    "input": "2024-01-01 to 2024-01-31",
+    "description": "Date range only may be interpreted as transaction period; agent may use transaction_categorize or ask for clarification",
+    "expected_tool_calls": ["transaction_categorize"],
+    "expected_output_fields": ["categories", "patterns"],
+    "criteria": [
+      {"id": "C1", "description": "transaction_categorize tool was called", "check_type": "tool_called", "expected": "transaction_categorize"}
+    ]
+  },
+  {
+    "id": "MVP-073",
+    "category": "multi_step",
+    "input": "Summarize my portfolio and check for compliance issues",
+    "description": "Multi-step: portfolio_analysis and compliance_check",
+    "expected_tool_calls": ["portfolio_analysis", "compliance_check"],
+    "expected_output_fields": ["total_value", "violations"],
+    "criteria": [
+      {"id": "C1", "description": "portfolio_analysis tool was called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+      {"id": "C2", "description": "compliance_check tool was called", "check_type": "tool_called", "expected": "compliance_check"}
+    ]
+  },
+  {
+    "id": "MVP-074",
+    "category": "multi_step",
+    "input": "What's my portfolio worth and what transaction patterns did I have last month?",
+    "description": "Multi-step: portfolio_analysis and transaction_categorize",
+    "expected_tool_calls": ["portfolio_analysis", "transaction_categorize"],
+    "expected_output_fields": ["total_value", "patterns"],
+    "criteria": [
+      {"id": "C1", "description": "portfolio_analysis tool was called", "check_type": "tool_called", "expected": "portfolio_analysis"},
+      {"id": "C2", "description": "transaction_categorize tool was called", "check_type": "tool_called", "expected": "transaction_categorize"}
+    ]
+  },
+  {
+    "id": "MVP-075",
+    "category": "multi_step",
+    "input": "Assess my risk and then get the current price of AAPL",
+    "description": "Multi-step: risk_assessment and market_data_lookup",
+    "expected_tool_calls": ["risk_assessment", "market_data_lookup"],
+    "expected_output_fields": ["overall_risk_score", "data"],
+    "criteria": [
+      {"id": "C1", "description": "risk_assessment tool was called", "check_type": "tool_called", "expected": "risk_assessment"},
+      {"id": "C2", "description": "market_data_lookup tool was called", "check_type": "tool_called", "expected": "market_data_lookup"}
+    ]
   }
 ]

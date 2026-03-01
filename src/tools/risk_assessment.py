@@ -7,7 +7,11 @@ from langchain_core.tools import tool
 from langsmith import traceable
 from pydantic import BaseModel, Field
 
-from src.api.ghostfolio import GhostfolioClient
+from src.api.ghostfolio import (
+    AuthenticationError,
+    GhostfolioAPIError,
+    GhostfolioClient,
+)
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -506,6 +510,19 @@ async def risk_assessment(
 
             return result
 
+        except AuthenticationError:
+            logger.warning("Risk assessment: Ghostfolio authentication failed")
+            return (
+                "I couldn't access your portfolio. The Ghostfolio connection may not be set up, "
+                "or your access token may be missing or invalid. Please add your Ghostfolio access token "
+                "(from Ghostfolio → Settings → Security) in the configuration so I can assess your risk."
+            )
+        except GhostfolioAPIError as e:
+            logger.warning("Risk assessment: Ghostfolio API error: %s", e)
+            return (
+                "I couldn't complete the risk check for your portfolio. Please check your Ghostfolio configuration "
+                "or try again later. If you need help, ask me how to set up Ghostfolio."
+            )
         except Exception as e:
             logger.error(f"Risk assessment failed: {e}")
             raise

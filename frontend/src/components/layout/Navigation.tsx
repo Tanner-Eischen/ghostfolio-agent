@@ -1,46 +1,50 @@
 import { Link, NavLink } from 'react-router-dom';
+import { useAppMode } from '../../contexts/AppModeContext';
+import { ModeToggle } from '../ModeToggle';
 
 interface NavItem {
   label: string;
   path: string;
   icon: string;
   description: string;
+  developerOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { label: 'Repo Analysis', path: '/', icon: 'dashboard', description: 'Connect and analyze repositories' },
-  { label: 'Agent Chat', path: '/chat', icon: 'chat', description: 'Interact with the AI agent' },
-  { label: 'Verification', path: '/verification', icon: 'verified_user', description: 'Configure checks and run evaluations' },
-  { label: 'Observability', path: '/observability', icon: 'monitoring', description: 'View traces and cost metrics' },
+  { label: 'Verification', path: '/verification', icon: 'verified_user', description: 'Configure checks and run evaluations', developerOnly: true },
+  { label: 'Observability', path: '/observability', icon: 'monitoring', description: 'View traces and cost metrics', developerOnly: true },
 ];
 
 export function Navigation() {
+  const { appMode, setAppMode } = useAppMode();
+  const visibleNavItems = appMode === 'developer' ? navItems : navItems.filter((item) => !item.developerOnly);
+
   return (
-    <header className="sticky top-0 z-50 flex items-center justify-between flex-wrap gap-2 border-b border-solid border-surface-border bg-background-dark/80 backdrop-blur-md px-4 sm:px-6 py-3">
-      <div className="flex items-center gap-4 sm:gap-6 flex-wrap">
-        {/* Brand - clickable home */}
+    <header className="sticky top-0 z-50 flex items-center justify-between flex-wrap gap-2 border-b border-solid border-surface-border bg-background-dark/80 backdrop-blur-md px-3 py-2 sm:px-6 sm:py-3">
+      <div className="flex items-center gap-2 sm:gap-6 flex-wrap min-w-0">
+        {/* Brand - clickable home; icon always, title hidden on narrow */}
         <Link
           to="/"
-          className="flex items-center gap-3 text-white hover:opacity-90 transition-opacity rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50"
-          title="Repo Analysis"
+          className="flex items-center gap-2 sm:gap-3 text-white hover:opacity-90 transition-opacity rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 shrink-0"
+          title="Ghostfolio Agent"
         >
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-primary/20 text-primary">
-            <span className="material-symbols-outlined">smart_toy</span>
+          <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/20 text-primary">
+            <span className="material-symbols-outlined text-xl sm:text-2xl">smart_toy</span>
           </div>
-          <h2 className="text-lg font-bold leading-tight tracking-[-0.015em]">
+          <h2 className="hidden sm:block text-base sm:text-xl font-bold leading-tight tracking-[-0.015em] truncate">
             Ghostfolio Agent
           </h2>
         </Link>
 
-        {/* Nav Links - always visible */}
-        <nav className="flex items-center gap-1" aria-label="Main navigation">
-          {navItems.map((item) => (
+        {/* Nav Links - wrap on small screens */}
+        <nav className="flex items-center gap-1 flex-wrap" aria-label="Main navigation">
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
               end={item.path === '/'}
               className={({ isActive }) =>
-                `px-3 py-2 text-sm font-medium leading-normal rounded-lg transition-colors ${
+                `px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm font-medium leading-normal rounded-lg transition-colors ${
                   isActive
                     ? 'text-white bg-surface-dark'
                     : 'text-text-dim hover:text-white hover:bg-surface-dark'
@@ -54,19 +58,12 @@ export function Navigation() {
         </nav>
       </div>
 
-      {/* Right side */}
-      <div className="flex items-center gap-4">
-        {/* Repo pill */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-dark border border-surface-border">
-          <span className="material-symbols-outlined text-text-dim text-sm">fork_right</span>
-          <span className="text-sm font-medium text-slate-300">ghostfolio/core</span>
-          <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded ml-2">
-            v2.4.0
-          </span>
-        </div>
+      {/* Right side: mode toggle and avatar */}
+      <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+        <ModeToggle mode={appMode} onChange={setAppMode} />
 
         {/* User avatar */}
-        <div className="size-9 rounded-full bg-surface-dark bg-center bg-cover border border-surface-border" />
+        <div className="size-8 sm:size-9 rounded-full bg-surface-dark bg-center bg-cover border border-surface-border" />
       </div>
     </header>
   );

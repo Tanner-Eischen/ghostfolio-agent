@@ -142,110 +142,81 @@ export function RepoConnector({ onConnected, onDisconnect, connectedRepo }: Repo
     );
   }
 
-  // Connection form
+  // Connection form – landing style: one main input + CTA
   return (
-    <div className="bg-surface-dark border border-surface-border rounded-xl p-5">
-      <div className="flex items-center gap-3 mb-4">
-        <div className="p-2 rounded-lg bg-primary/20 text-primary">
-          <span className="material-symbols-outlined text-xl">cable</span>
-        </div>
-        <div>
-          <h3 className="text-sm font-bold text-white">Connect to Repository</h3>
-          <p className="text-xs text-slate-400">
-            Enter a git URL or local path to analyze a target codebase
-          </p>
-        </div>
+    <div className="bg-surface-dark/50 border border-surface-border rounded-2xl p-6">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="material-symbols-outlined text-primary text-xl">folder</span>
+        <h3 className="text-sm font-semibold text-white">Connect a repository</h3>
       </div>
+      <p className="text-xs text-slate-400 mb-4">Git URL or local path to analyze</p>
 
-      <div className="space-y-3">
-        <div>
-          <label className="block text-xs text-slate-400 mb-1">
-            Git URL or Local Path
-          </label>
-          <input
-            type="text"
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            placeholder="https://github.com/user/repo.git or /path/to/repo"
-            className="w-full bg-surface-darker border border-surface-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-primary/50"
-            onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">
-              Branch (optional)
-            </label>
-            <input
-              type="text"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              placeholder="main"
-              className="w-full bg-surface-darker border border-surface-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-primary/50"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">
-              Display Name (optional)
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="My Repo"
-              className="w-full bg-surface-darker border border-surface-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-primary/50"
-            />
-          </div>
-        </div>
-
-        {error && (
-          <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-            <span className="material-symbols-outlined text-sm">error</span>
-            {error}
-          </div>
-        )}
-
+      <div className="flex flex-col sm:flex-row gap-2">
+        <input
+          type="text"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+          placeholder="https://github.com/user/repo or /path/to/repo"
+          className="flex-1 min-w-0 bg-surface-darker border border-surface-border rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-primary/50"
+          onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
+        />
         <button
           onClick={() => handleConnect()}
           disabled={loading || !source.trim()}
-          className="w-full bg-primary hover:bg-cyan-400 disabled:bg-slate-600 disabled:cursor-not-allowed text-surface-darker font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+          className="shrink-0 bg-primary hover:bg-cyan-400 disabled:bg-slate-600 disabled:cursor-not-allowed text-surface-darker font-medium py-2.5 px-5 rounded-lg transition-colors flex items-center justify-center gap-2"
         >
           {loading ? (
-            <>
-              <span className="material-symbols-outlined text-sm animate-spin">sync</span>
-              Connecting...
-            </>
+            <span className="material-symbols-outlined text-sm animate-spin">sync</span>
           ) : (
-            <>
-              <span className="material-symbols-outlined text-sm">link</span>
-              Connect Repository
-            </>
+            <span className="material-symbols-outlined text-sm">link</span>
           )}
+          {loading ? 'Connecting...' : 'Connect'}
         </button>
       </div>
 
-      <div className="mt-4 pt-4 border-t border-surface-border">
-        <p className="text-xs text-slate-400 mb-2">Quick Connect:</p>
-        <div className="flex flex-wrap gap-2">
+      <details className="mt-3 group">
+        <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-400 list-none">
+          Branch / name (optional)
+        </summary>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <input
+            type="text"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            placeholder="Branch"
+            className="bg-surface-darker border border-surface-border rounded px-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-primary/50"
+          />
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Display name"
+            className="bg-surface-darker border border-surface-border rounded px-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-primary/50"
+          />
+        </div>
+      </details>
+
+      {error && (
+        <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mt-3">
+          <span className="material-symbols-outlined text-sm shrink-0">error</span>
+          {error}
+        </div>
+      )}
+
+      <div className="mt-4 pt-3 border-t border-surface-border/50">
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-2">Quick connect</p>
+        <div className="flex flex-wrap gap-1.5">
           {QUICK_REPOS.map((repo) => (
             <button
               key={repo.name}
               onClick={() => handleConnect(repo.source, repo.name)}
               disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-darker border border-surface-border rounded-lg text-xs text-slate-300 hover:text-white hover:border-primary/50 transition-colors disabled:opacity-50"
+              className="px-2.5 py-1 bg-surface-darker/80 border border-surface-border rounded-md text-[11px] text-slate-400 hover:text-white hover:border-primary/40 transition-colors disabled:opacity-50"
             >
-              <span className="material-symbols-outlined text-sm text-primary">bolt</span>
               {repo.name}
             </button>
           ))}
         </div>
-        <p className="text-xs text-slate-500 mt-3">
-          <span className="text-slate-400">Supported:</span> HTTPS git URLs, local filesystem paths
-        </p>
-        <p className="text-xs text-slate-500 mt-1">
-          <span className="text-amber-400">Note:</span> SSH URLs and embedded credentials are not supported
-        </p>
       </div>
     </div>
   );

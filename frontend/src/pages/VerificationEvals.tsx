@@ -1,4 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAppMode } from '../contexts/AppModeContext';
 import { verificationApi, evalsApi } from '../api/client';
 import type { VerificationConfig, EvalCase, EvalResult, EvalSummary, EvalCriterionResult, ToolCallDetail } from '../api/client';
 
@@ -418,6 +420,12 @@ function CheckTypeLegend() {
 }
 
 export function VerificationEvals() {
+  const { appMode } = useAppMode();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (appMode === 'user') navigate('/', { replace: true });
+  }, [appMode, navigate]);
+
   // Verification state
   const [config, setConfig] = useState<VerificationConfig>(defaultConfig);
   const [configLoading, setConfigLoading] = useState(true);

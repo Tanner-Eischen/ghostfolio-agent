@@ -1,11 +1,9 @@
-import { useCallback, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ReactFlow,
   Background,
-  Controls,
-  MiniMap,
-  useNodesState,
-  useEdgesState,
+  useReactFlow,
+  ReactFlowProvider,
   type Node,
   type Edge,
   type NodeProps,
@@ -15,59 +13,57 @@ import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
 import type { DependencyNode, DependencyEdge } from '../api/client';
 
-const COLOR_MAP: Record<string, { bg: string; border: string; text: string }> = {
-  primary: { bg: 'rgba(6, 182, 212, 0.15)', border: '#06b6d4', text: '#06b6d4' },
-  indigo: { bg: 'rgba(129, 140, 248, 0.15)', border: '#818cf8', text: '#818cf8' },
-  emerald: { bg: 'rgba(16, 185, 129, 0.15)', border: '#10b981', text: '#10b981' },
-  slate: { bg: 'rgba(100, 116, 139, 0.15)', border: '#64748b', text: '#f1f5f9' },
+const COLORS: Record<string, string> = {
+  primary: '#06b6d4',
+  indigo: '#818cf8',
+  emerald: '#10b981',
+  slate: '#64748b',
 };
 
-const NODE_WIDTH = 140;
-const NODE_HEIGHT = 72;
+function layoutWithDagre(nodes: Node[], edges: Edge[]): Node[] {
+  if (nodes.length === 0) return [];
 
-type LayoutDirection = 'TB' | 'LR' | 'BT' | 'RL';
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'TB', nodesep: 60, ranksep: 80, marginx: 40, marginy: 40 });
+  g.setDefaultEdgeLabel(() => ({}));
 
-function getLayoutedElements(
-  nodes: Node<Record<string, unknown>>[],
-  edges: Edge[],
-  direction: LayoutDirection = 'TB'
-): { nodes: Node<Record<string, unknown>>[]; edges: Edge[] } {
-  const dagreGraph = new dagre.graphlib.Graph({ compound: true });
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
-  dagreGraph.setGraph({ rankdir: direction, nodesep: 60, ranksep: 80 });
+  nodes.forEach(n => g.setNode(n.id, { width: 120, height: 40 }));
+  edges.forEach(e => g.setEdge(e.source, e.target));
+  dagre.layout(g);
 
-  nodes.forEach((node) => {
-    dagreGraph.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
-  });
-
-  edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
-  });
-
-  dagre.layout(dagreGraph);
-
-  const isHorizontal = direction === 'LR' || direction === 'RL';
-  const sourcePos = isHorizontal ? (direction === 'LR' ? 'right' : 'left') : 'bottom';
-  const targetPos = isHorizontal ? (direction === 'LR' ? 'left' : 'right') : 'top';
-  const layoutedNodes = nodes.map((node) => {
-    const nodeWithPosition = dagreGraph.node(node.id);
+  return nodes.map(n => {
+    const pos = g.node(n.id);
     return {
-      ...node,
-      position: {
-        x: nodeWithPosition.x - NODE_WIDTH / 2,
-        y: nodeWithPosition.y - NODE_HEIGHT / 2,
-      },
-      sourcePosition: sourcePos,
-      targetPosition: targetPos,
-    } as Node<Record<string, unknown>>;
+      ...n,
+      position: { x: (pos?.x ?? 0) - 60, y: (pos?.y ?? 0) - 20 },
+    };
   });
-
-  return { nodes: layoutedNodes, edges };
 }
+
+function SimpleNode({ data }: NodeProps) {
+  const d = data as unknown as DependencyNode;
+  const color = COLORS[d.color] || COLORS.slate;
+
+  return (
+    <div
+      className="rounded-lg border-2 px-3 py-2 bg-surface-dark"
+      style={{ borderColor: color, minWidth: 100 }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="material-symbols-outlined text-sm" style={{ color }}>
+          {d.icon || 'extension'}
+        </span>
+        <span className="text-xs font-medium text-white">{d.name}</span>
+      </div>
+    </div>
+  );
+}
+
+const nodeTypes = { simple: SimpleNode };
 
 export type DependencyGraphLayout = 'hierarchical' | 'horizontal' | 'radial';
 
-interface DependencyGraphProps {
+interface Props {
   nodes: DependencyNode[];
   edges: DependencyEdge[];
   layout?: DependencyGraphLayout;
@@ -77,161 +73,134 @@ interface DependencyGraphProps {
   className?: string;
 }
 
-function ModuleNode({ data, selected }: NodeProps) {
-  const d = data as unknown as DependencyNode;
-  const colors = COLOR_MAP[d.color] || COLOR_MAP.slate;
-  const hasCircular = d.has_circular;
-  const fileCount = d.file_count ?? 0;
-  const lineCount = d.line_count ?? 0;
-
+export function DependencyGraph(props: Props) {
   return (
-    <div
-      className={`rounded-xl border-2 px-3 py-2 shadow-md transition-all ${
-        selected ? 'ring-2 ring-primary ring-offset-2 ring-offset-surface-darker' : ''
-      } ${hasCircular ? 'ring-1 ring-amber-400' : ''}`}
-      style={{
-        backgroundColor: colors.bg,
-        borderColor: colors.border,
-        minWidth: NODE_WIDTH,
-        minHeight: NODE_HEIGHT,
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <span
-          className="material-symbols-outlined text-xl"
-          style={{ color: colors.text }}
-        >
-          {d.icon || 'extension'}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold text-sm" style={{ color: colors.text }}>
-            {d.name}
-          </div>
-          {(fileCount > 0 || lineCount > 0) && (
-            <div className="text-[10px] text-slate-500">
-              {fileCount} files · {lineCount.toLocaleString()} LOC
-            </div>
-          )}
-          {hasCircular && (
-            <div className="text-[10px] text-amber-400">Circular dep</div>
-          )}
-        </div>
-      </div>
-    </div>
+    <ReactFlowProvider>
+      <Inner {...props} />
+    </ReactFlowProvider>
   );
 }
 
-const nodeTypes = { module: ModuleNode };
-
-function toFlowNodes(apiNodes: DependencyNode[]): Node<Record<string, unknown>>[] {
-  return apiNodes.map((n) => ({
-    id: n.id,
-    type: 'module',
-    data: n as unknown as Record<string, unknown>,
-    position: { x: 0, y: 0 },
-  }));
-}
-
-function toFlowEdges(apiEdges: DependencyEdge[]): Edge[] {
-  return apiEdges.map((e, i) => ({
-    id: `e-${e.source}-${e.target}-${i}`,
-    source: e.source,
-    target: e.target,
-    label: e.weight && e.weight > 1 ? String(e.weight) : undefined,
-    style: { strokeWidth: Math.min(4, 1 + (e.weight ?? 1) * 0.3) },
-    animated: (e.weight ?? 1) >= 3,
-  }));
-}
-
-export function DependencyGraph({
-  nodes: apiNodes,
-  edges: apiEdges,
-  layout = 'hierarchical',
-  onNodeSelect,
-  selectedNodeId,
-  searchTerm = '',
-  className = '',
-}: DependencyGraphProps) {
-  const direction: LayoutDirection =
-    layout === 'horizontal' ? 'LR' : layout === 'radial' ? 'TB' : 'TB';
-
-  const initialNodes = toFlowNodes(apiNodes);
-  const initialEdges = toFlowEdges(apiEdges);
-  const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
-    initialNodes,
-    initialEdges,
-    direction
-  );
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes as Node[]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
+function Inner({ nodes: apiNodes, edges: apiEdges, searchTerm = '', className = '' }: Props) {
+  const { fitView, zoomIn, zoomOut } = useReactFlow();
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
 
   useEffect(() => {
-    const { nodes: nextNodes, edges: nextEdges } = getLayoutedElements(
-      toFlowNodes(apiNodes),
-      toFlowEdges(apiEdges),
-      direction
-    );
-    setNodes(nextNodes);
-    setEdges(nextEdges);
-  }, [apiNodes, apiEdges, direction, setNodes, setEdges]);
+    // Deduplicate by id (React Flow keeps one node per id; duplicates would hide nodes)
+    const seenIds = new Set<string>();
+    const uniqueNodes: DependencyNode[] = [];
+    for (const n of apiNodes) {
+      if (seenIds.has(n.id)) {
+        console.warn('DependencyGraph: duplicate node id dropped:', n.id, n.name);
+        continue;
+      }
+      seenIds.add(n.id);
+      uniqueNodes.push(n);
+    }
+    if (uniqueNodes.length !== apiNodes.length) {
+      console.log('DependencyGraph: deduplicated nodes', apiNodes.length, '->', uniqueNodes.length);
+    }
 
-  const filteredNodeIds = searchTerm
-    ? new Set(
-        apiNodes
-          .filter((n) =>
-            n.name.toLowerCase().includes(searchTerm.toLowerCase())
-          )
-          .map((n) => n.id)
-      )
+    // Optional filter by search term (case-insensitive name substring)
+    const term = searchTerm.trim().toLowerCase();
+    const nodesToRender = term
+      ? uniqueNodes.filter(n => n.name.toLowerCase().includes(term))
+      : uniqueNodes;
+
+    console.log('API nodes:', apiNodes.length, 'unique:', uniqueNodes.length, 'visible:', nodesToRender.length, term ? `(filter: "${searchTerm}")` : '');
+
+    if (nodesToRender.length === 0) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
+
+    // Create a set of valid node IDs for validation
+    const nodeIds = new Set(nodesToRender.map(n => n.id));
+
+    // Convert to ReactFlow format
+    const flowNodes: Node[] = nodesToRender.map(n => ({
+      id: n.id,
+      type: 'simple',
+      data: n as unknown as Record<string, unknown>,
+      position: { x: 0, y: 0 },
+    }));
+
+    // Filter edges: valid refs and (when search active) both endpoints visible
+    const validEdges = apiEdges.filter(e => {
+      if (!e.source || !e.target) {
+        console.warn('Edge with null source/target:', e);
+        return false;
+      }
+      if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) {
+        if (!term) console.warn('Edge references non-existent node:', e.source, '->', e.target);
+        return false;
+      }
+      return true;
+    });
+
+    const flowEdges: Edge[] = validEdges.map((e, i) => ({
+      id: `e${i}`,
+      source: e.source,
+      target: e.target,
+      type: 'smoothstep',
+      style: { stroke: '#475569', strokeWidth: 1.5 },
+    }));
+
+    console.log('Flow nodes:', flowNodes.length, 'Flow edges:', flowEdges.length, '(filtered from', apiEdges.length, ')');
+
+    const layouted = layoutWithDagre(flowNodes, flowEdges);
+    setNodes(layouted);
+    setEdges(flowEdges);
+
+    setTimeout(() => fitView({ padding: 0.3 }), 100);
+  }, [apiNodes, apiEdges, searchTerm, fitView]);
+
+  const uniqueNodeCount = new Set(apiNodes.map(n => n.id)).size;
+  const visibleCount = searchTerm.trim()
+    ? (() => {
+        const term = searchTerm.trim().toLowerCase();
+        const visible = apiNodes.filter(n => n.name.toLowerCase().includes(term));
+        const visibleIds = new Set<string>();
+        const visibleUniq = visible.filter(n => { if (visibleIds.has(n.id)) return false; visibleIds.add(n.id); return true; });
+        return { visible: visibleUniq.length, total: uniqueNodeCount };
+      })()
     : null;
 
-  const visibleNodes = nodes.map((n) => {
-    let className = '';
-    if (filteredNodeIds !== null && !filteredNodeIds.has(n.id)) className = 'opacity-30';
-    return {
-      ...n,
-      className,
-      selected: selectedNodeId === n.id,
-    };
-  });
-
-  const onNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      const apiNode = apiNodes.find((n) => n.id === node.id) ?? null;
-      onNodeSelect?.(apiNode);
-    },
-    [apiNodes, onNodeSelect]
-  );
+  if (apiNodes.length === 0) {
+    return (
+      <div className={`flex items-center justify-center ${className}`}>
+        <p className="text-slate-500">No modules detected</p>
+      </div>
+    );
+  }
 
   return (
-    <div className={`h-full w-full ${className}`}>
+    <div className={className}>
       <ReactFlow
-        nodes={visibleNodes}
+        nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onNodeClick={onNodeClick}
-        onPaneClick={() => onNodeSelect?.(null)}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
-        defaultEdgeOptions={{ type: 'smoothstep', markerEnd: { type: 'arrowclosed' } }}
-        minZoom={0.2}
-        maxZoom={1.5}
+        minZoom={0.1}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+        panOnScroll={false}
+        zoomOnScroll
       >
-        <Background gap={16} size={1} color="rgba(100,116,139,0.2)" />
-        <Controls className="!bottom-2 !top-auto !z-50" />
-        <MiniMap
-          nodeColor={(n) => {
-            const d = n.data as unknown as DependencyNode;
-            return COLOR_MAP[d.color]?.border ?? '#64748b';
-          }}
-          maskColor="rgba(15,23,42,0.8)"
-          className="!bottom-2 !left-2 !bg-surface-darker"
-        />
-        <Panel position="top-left" className="text-xs text-slate-500">
-          Layout: {layout} · {apiNodes.length} modules
+        <Background color="#334155" />
+        <Panel position="bottom-right" className="flex gap-1">
+          <button onClick={() => fitView({ padding: 0.3 })} className="px-2 py-1 text-xs bg-surface-dark text-white border border-slate-600 rounded">Fit</button>
+          <button onClick={() => zoomIn()} className="px-2 py-1 text-sm bg-surface-dark text-white border border-slate-600 rounded">+</button>
+          <button onClick={() => zoomOut()} className="px-2 py-1 text-sm bg-surface-dark text-white border border-slate-600 rounded">−</button>
+        </Panel>
+        <Panel position="top-left">
+          <span className="text-xs text-slate-400 bg-surface-dark px-2 py-1 rounded">
+            {visibleCount
+              ? `${visibleCount.visible} of ${visibleCount.total} nodes`
+              : `${uniqueNodeCount} nodes`} · {edges.length} edges
+          </span>
         </Panel>
       </ReactFlow>
     </div>

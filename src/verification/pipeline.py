@@ -9,8 +9,12 @@ The pipeline runs multiple verification steps:
 6. Market data freshness - Verify timestamps are within threshold
 
 Then synthesizes results into a comprehensive verification report.
+
+Performance: Market data freshness, fact checks, and citation verification
+run in parallel where possible to reduce wall-clock time.
 """
 
+import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import Any, Literal
 
@@ -184,22 +188,33 @@ class VerificationPipeline:
             portfolio_warnings.extend(pw)
             portfolio_triggers.extend(pt)
 
-        # 1.6. Market data freshness (domain verification)
+        # 1.6–3. Run market freshness, fact checks, and citation verification in parallel
         market_warnings: list[str] = []
         market_triggers: list[str] = []
-        if tool_outputs:
-            mw, mt = await self._check_market_data_freshness(tool_outputs)
-            market_warnings.extend(mw)
-            market_triggers.extend(mt)
 
-        # 2. Run fact checking on key claims
-        fact_check_results = await self._run_fact_checks(response, tool_outputs)
+        async def _market_freshness() -> tuple[list[str], list[str]]:
+            if not tool_outputs:
+                return [], []
+            return await self._check_market_data_freshness(tool_outputs)
 
-        # 3. Run citation verification
-        if tool_outputs:
-            citation_result = await self.fact_checker.extract_and_verify_citations(
+        async def _citations() -> CitationCheckResult | None:
+            if not tool_outputs:
+                return None
+            return await self.fact_checker.extract_and_verify_citations(
                 response, tool_outputs
             )
+
+        (
+            (_mw, _mt),
+            fact_check_results,
+            citation_result,
+        ) = await asyncio.gather(
+            _market_freshness(),
+            self._run_fact_checks(response, tool_outputs),
+            _citations(),
+        )
+        market_warnings.extend(_mw)
+        market_triggers.extend(_mt)
 
         # 4. Compile verification results for confidence scoring
         verification_results = self._compile_verification_results(
@@ -386,10 +401,13 @@ class VerificationPipeline:
         # Extract sentences that might contain claims
         sentences = self._extract_claim_sentences(response)
 
-        for sentence in sentences[:5]:  # Check up to 5 claims
-            result = await self.fact_checker.verify_claim(sentence, source_data)
-            results.append(result)
-
+        # Check up to 5 claims in parallel to reduce verification latency
+        tasks = [
+            self.fact_checker.verify_claim(sentence, source_data)
+            for sentence in sentences[:5]
+        ]
+        if tasks:
+            results = list(await asyncio.gather(*tasks))
         return results
 
     def _extract_claim_sentences(self, text: str) -> list[str]:

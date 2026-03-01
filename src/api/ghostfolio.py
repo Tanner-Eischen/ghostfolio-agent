@@ -482,8 +482,13 @@ class GhostfolioClient:
 
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
-            timeout=30.0,
+            timeout=httpx.Timeout(30.0, connect=10.0),
             headers={"Content-Type": "application/json"},
+            limits=httpx.Limits(
+                max_keepalive_connections=8,
+                max_connections=16,
+                keepalive_expiry=30.0,
+            ),
         )
 
         logger.info(
@@ -611,7 +616,7 @@ class GhostfolioClient:
                 json={"accessToken": self._access_token},
             )
 
-            if response.status_code != 200:
+            if response.status_code < 200 or response.status_code >= 300:
                 raise AuthenticationError(
                     f"Authentication failed with status {response.status_code}"
                 )
@@ -655,13 +660,49 @@ class GhostfolioClient:
 
         await self._ensure_authenticated()
 
-        data = await self._request_with_retry("GET", "/api/v1/portfolio")
-        data["last_updated"] = datetime.utcnow().isoformat()
-
+        # Ghostfolio API: portfolio data is at /details (not /portfolio)
+        raw = await self._request_with_retry(
+            "GET", "/api/v1/portfolio/details", params={"range": "max"}
+        )
+        # Map Ghostfolio details response to our expected shape
+        summary = raw.get("summary") or {}
+        holdings_obj = raw.get("holdings") or {}
+        total_value = float(
+            summary.get("currentValueInBaseCurrency")
+            or summary.get("totalValueInBaseCurrency")
+            or 0
+        )
+        # holdings is symbol -> position; convert to list for tools
+        holdings_list = []
+        for symbol, pos in holdings_obj.items():
+            if not isinstance(pos, dict):
+                continue
+            value = float(pos.get("valueInBaseCurrency", 0))
+            pct = float(pos.get("valueInPercentage", 0)) * 100 if pos.get("valueInPercentage") is not None else 0
+            holdings_list.append({
+                "symbol": symbol,
+                "name": pos.get("name", symbol),
+                "quantity": float(pos.get("quantity", 0)),
+                "value": value,
+                "allocation_pct": pct,
+                "allocationPct": pct,
+                "asset_class": pos.get("assetClass"),
+                "assetClass": pos.get("assetClass"),
+                "currency": pos.get("currency", "USD"),
+            })
+        data = {
+            "total_value": total_value,
+            "totalValue": total_value,
+            "holdings": holdings_list,
+            "summary": summary,
+            "accounts": raw.get("accounts"),
+            "currency": "USD",
+            "last_updated": datetime.utcnow().isoformat(),
+        }
         # Cache the result
         self._cache.set(cache_key, data)
 
-        logger.info(f"Retrieved portfolio data with {len(data.get('holdings', []))} holdings")
+        logger.info(f"Retrieved portfolio data with {len(holdings_list)} holdings")
         return data
 
     async def get_positions(self) -> list[dict[str, Any]]:
@@ -683,8 +724,32 @@ class GhostfolioClient:
 
         await self._ensure_authenticated()
 
-        data = await self._request_with_retry("GET", "/api/v1/portfolio/positions")
-        positions = data if isinstance(data, list) else data.get("positions", [])
+        # Ghostfolio API: positions are at /holdings (returns { holdings: [...] })
+        data = await self._request_with_retry(
+            "GET", "/api/v1/portfolio/holdings", params={"range": "max"}
+        )
+        raw_holdings = data.get("holdings", []) if isinstance(data, dict) else []
+        if not raw_holdings and isinstance(data.get("holdings"), dict):
+            # Details-style: holdings is object keyed by symbol
+            raw_holdings = [
+                {"symbol": sym, **pos} for sym, pos in (data.get("holdings") or {}).items()
+                if isinstance(pos, dict)
+            ]
+        positions = []
+        for h in raw_holdings:
+            if not isinstance(h, dict):
+                continue
+            value = float(h.get("valueInBaseCurrency", h.get("value", 0)))
+            positions.append({
+                "id": h.get("id", h.get("symbol", "")),
+                "symbol": h.get("symbol", ""),
+                "name": h.get("name", h.get("symbol", "")),
+                "quantity": float(h.get("quantity", 0)),
+                "value": value,
+                "currency": h.get("currency", "USD"),
+                "assetClass": h.get("assetClass"),
+                "assetSubClass": h.get("assetSubClass"),
+            })
 
         # Cache the result
         self._cache.set(cache_key, positions)

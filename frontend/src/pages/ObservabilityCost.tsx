@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { tracesApi, financesApi } from '../api/client';
-import type { Trace, TraceDetail, UsageStats, CostProjections } from '../api/client';
+import { useNavigate } from 'react-router-dom';
+import { useAppMode } from '../contexts/AppModeContext';
+import { tracesApi, financesApi, agentApi } from '../api/client';
+import type { Trace, TraceDetail, UsageStats, CostProjections, CostComparison } from '../api/client';
 
 const emptyUsage: UsageStats = {
   total_cost: 0,
@@ -30,6 +32,12 @@ const LANGSMITH_BASE =
   'https://smith.langchain.com';
 
 export function ObservabilityCost() {
+  const { appMode } = useAppMode();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (appMode === 'user') navigate('/', { replace: true });
+  }, [appMode, navigate]);
+
   // Traces state
   const [traces, setTraces] = useState<Trace[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<TraceDetail | null>(null);
@@ -41,6 +49,17 @@ export function ObservabilityCost() {
   const [usage, setUsage] = useState<UsageStats>(emptyUsage);
   const [projections, setProjections] = useState<CostProjections>(emptyProjections);
   const [queriesPerDay, setQueriesPerDay] = useState(100);
+  const [costComparison, setCostComparison] = useState<CostComparison | null>(null);
+
+  // Agent config (developer: switch model)
+  const [currentModel, setCurrentModel] = useState<string>('gpt-4o-mini');
+  const [allowedModels, setAllowedModels] = useState<string[]>(['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo']);
+  const [agentConfigLoading, setAgentConfigLoading] = useState(true);
+  const [modelSelectSaving, setModelSelectSaving] = useState(false);
+
+  // Seed demo state
+  const [seedLoading, setSeedLoading] = useState(false);
+  const [seedResult, setSeedResult] = useState<{ entries: number; models: number } | null>(null);
 
   // Error state for user feedback
   const [tracesError, setTracesError] = useState<string | null>(null);
@@ -82,21 +101,21 @@ export function ObservabilityCost() {
 
   // Load finances with race condition handling
   useEffect(() => {
-    // Abort any previous request tracking
     const requestId = Date.now();
     financesAbortRef.current = requestId;
     setFinancesError(null);
 
     async function fetchData() {
       try {
-        const [usageData, projectionsData] = await Promise.all([
+        const [usageData, projectionsData, comparisonData] = await Promise.all([
           financesApi.getUsage(),
           financesApi.getProjections(queriesPerDay),
+          financesApi.getCostComparison({ queries_per_day: queriesPerDay }),
         ]);
-        // Only update if this is still the latest request
         if (financesAbortRef.current === requestId) {
           setUsage(usageData);
           setProjections(projectionsData);
+          setCostComparison(comparisonData);
         }
       } catch (error) {
         if (financesAbortRef.current === requestId) {
@@ -107,6 +126,69 @@ export function ObservabilityCost() {
       }
     }
     fetchData();
+  }, [queriesPerDay]);
+
+  // Load agent config (current model) on mount
+  useEffect(() => {
+    let cancelled = false;
+    setAgentConfigLoading(true);
+    agentApi
+      .getConfig()
+      .then((config) => {
+        if (!cancelled) {
+          setCurrentModel(config.model);
+          if (config.allowed_models?.length) setAllowedModels(config.allowed_models);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentModel('gpt-4o-mini');
+      })
+      .finally(() => {
+        if (!cancelled) setAgentConfigLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleModelChange = useCallback(async (model: string) => {
+    setModelSelectSaving(true);
+    try {
+      await agentApi.putConfig({ model });
+      setCurrentModel(model);
+    } catch (err) {
+      console.error('Failed to switch model:', err);
+    } finally {
+      setModelSelectSaving(false);
+    }
+  }, []);
+
+  const handleSeedDemo = useCallback(async () => {
+    setSeedLoading(true);
+    setSeedResult(null);
+    setFinancesError(null);
+    try {
+      const res = await financesApi.seedDemoUsage({ entries_per_model: 12, days_back: 3 });
+      setSeedResult({ entries: res.entries_added, models: res.models });
+      const requestId = Date.now();
+      financesAbortRef.current = requestId;
+      const [usageData, projectionsData, comparisonData] = await Promise.all([
+        financesApi.getUsage(),
+        financesApi.getProjections(queriesPerDay),
+        financesApi.getCostComparison({ queries_per_day: queriesPerDay }),
+      ]);
+      if (financesAbortRef.current === requestId) {
+        setUsage(usageData);
+        setProjections(projectionsData);
+        setCostComparison(comparisonData);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to seed demo data';
+      setFinancesError(message);
+      console.error('Seed demo failed:', err);
+    } finally {
+      setSeedLoading(false);
+    }
   }, [queriesPerDay]);
 
   const handleSelectTrace = useCallback(async (traceId: string) => {
@@ -248,6 +330,32 @@ export function ObservabilityCost() {
               <p className="text-text-dim text-sm">Agent traces, token usage, and cost projections</p>
             </div>
             <div className="flex items-center gap-4">
+              {/* Developer: switch model */}
+              <div className="flex items-center gap-2">
+                <label htmlFor="agent-model-select" className="text-text-dim text-xs whitespace-nowrap">
+                  Model
+                </label>
+                <select
+                  id="agent-model-select"
+                  value={currentModel}
+                  onChange={(e) => handleModelChange(e.target.value)}
+                  disabled={agentConfigLoading || modelSelectSaving}
+                  className="bg-surface-dark border border-surface-border rounded-lg py-1.5 pl-2 pr-8 text-sm text-white focus:ring-1 focus:ring-primary focus:border-primary disabled:opacity-60"
+                  aria-label="Select LLM model"
+                >
+                  {allowedModels.map((modelId) => {
+                    const label = costComparison?.models.find((m) => m.model_id === modelId)?.label ?? modelId;
+                    return (
+                      <option key={modelId} value={modelId}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+                {modelSelectSaving && (
+                  <span className="material-symbols-outlined text-primary animate-spin text-lg">progress_activity</span>
+                )}
+              </div>
               <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-dark border border-surface-border rounded-lg">
                 <span className="material-symbols-outlined text-primary text-lg">account_balance_wallet</span>
                 <span className="text-white font-bold">${usage.total_cost.toFixed(2)}</span>
@@ -532,42 +640,98 @@ export function ObservabilityCost() {
               </div>
             </div>
 
-            {/* Cost by model */}
-            {usage.by_model && Object.keys(usage.by_model).length > 0 && (
-              <div className="mt-4 p-3 bg-surface-dark rounded-lg border border-surface-border">
-                <h4 className="text-xs font-semibold text-text-dim mb-2">Cost by Model</h4>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {Object.entries(usage.by_model).map(([model, data]) => (
-                    <div key={model} className="flex justify-between items-center text-xs">
-                      <span className="text-white truncate max-w-[140px]" title={model}>{model}</span>
+            {/* Cost by model — show all models (actual usage or $0) */}
+            <div className="mt-4 p-3 bg-surface-dark rounded-lg border border-surface-border">
+              <h4 className="text-xs font-semibold text-text-dim mb-2">Cost by Model</h4>
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {(costComparison?.models ?? Object.keys(usage.by_model || {}).map((model_id) => ({ model_id, label: model_id }))).map((m) => {
+                  const modelId = m.model_id;
+                  const label = m.label ?? modelId;
+                  const data = usage.by_model?.[modelId] ?? { cost: 0, requests: 0, tokens: 0 };
+                  return (
+                    <div key={modelId} className="flex justify-between items-center text-xs">
+                      <span className="text-white truncate max-w-[140px]" title={modelId}>
+                        {label}
+                        {data.requests > 0 && (
+                          <span className="text-text-dim ml-1">({data.requests})</span>
+                        )}
+                      </span>
                       <span className="text-primary font-medium">${data.cost.toFixed(4)}</span>
                     </div>
-                  ))}
+                  );
+                })}
+              </div>
+              <div className="text-[10px] text-text-dim mt-2">
+                {usage.requests_count > 0
+                  ? `${usage.requests_count} requests · $${usage.total_cost.toFixed(2)} total`
+                  : 'No usage yet. Use Seed demo data to populate for all models.'}
+              </div>
+              <button
+                type="button"
+                onClick={handleSeedDemo}
+                disabled={seedLoading}
+                className="mt-3 w-full flex items-center justify-center gap-2 py-2 px-3 bg-primary/20 hover:bg-primary/30 border border-primary/40 rounded-lg text-sm font-medium text-primary disabled:opacity-60 transition-colors"
+              >
+                {seedLoading ? (
+                  <>
+                    <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                    Seeding…
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-lg">science</span>
+                    Seed demo data
+                  </>
+                )}
+              </button>
+              {seedResult && (
+                <p className="text-[10px] text-emerald-400 mt-2">
+                  Added {seedResult.entries} entries across {seedResult.models} models.
+                </p>
+              )}
+            </div>
+
+            {/* Cost comparison by model */}
+            {costComparison && costComparison.models.length > 0 && (
+              <div className="mt-4 p-3 bg-surface-dark rounded-lg border border-surface-border">
+                <h4 className="text-xs font-semibold text-text-dim mb-2">
+                  Cost comparison by model ({costComparison.queries_per_day} queries/day)
+                </h4>
+                <div className="overflow-x-auto -mx-1">
+                  <table className="w-full text-[10px]">
+                    <thead>
+                      <tr className="text-text-dim border-b border-surface-border">
+                        <th className="text-left py-1.5 font-medium">Model</th>
+                        <th className="text-right py-1.5 font-medium">$/query</th>
+                        <th className="text-right py-1.5 font-medium">Monthly</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {costComparison.models.map((m) => (
+                        <tr
+                          key={m.model_id}
+                          className={`border-b border-surface-border/50 ${
+                            m.model_id === currentModel ? 'bg-primary/10 text-primary' : ''
+                          }`}
+                        >
+                          <td className="py-1.5 text-white">
+                            {m.label}
+                            {m.model_id === currentModel && (
+                              <span className="ml-1 text-[9px] text-primary">(current)</span>
+                            )}
+                          </td>
+                          <td className="text-right text-white">${m.cost_per_query.toFixed(4)}</td>
+                          <td className="text-right font-medium text-primary">${m.monthly_cost.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <div className="text-[10px] text-text-dim mt-2">
-                  {Object.values(usage.by_model).reduce((a, b) => a + b.requests, 0)} requests
-                </div>
+                <p className="text-[10px] text-text-dim mt-2">
+                  Input/Output: 60/40% · {costComparison.avg_tokens_per_query} tok/query
+                </p>
               </div>
             )}
-
-            {/* Pricing Reference */}
-            <div className="mt-4 p-3 bg-surface-dark rounded-lg border border-surface-border">
-              <h4 className="text-xs font-semibold text-text-dim mb-2">Pricing Reference (GPT-4o-mini)</h4>
-              <div className="space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-text-dim">Input</span>
-                  <span className="text-white">$0.15/1M tok</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-text-dim">Output</span>
-                  <span className="text-white">$0.60/1M tok</span>
-                </div>
-                <div className="flex justify-between border-t border-surface-border pt-1 mt-1">
-                  <span className="text-text-dim">Blended avg</span>
-                  <span className="text-white">~$0.60/1M tok</span>
-                </div>
-              </div>
-            </div>
 
             {/* No usage data message */}
             {usage.requests_count === 0 && (

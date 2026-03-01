@@ -1,6 +1,8 @@
 # Cost Analysis: Ghostfolio Agent
 
-This document provides cost projections for running the Ghostfolio Agent in production, based on actual development usage data and scaling assumptions.
+This document is for **service providers** who run the Ghostfolio Agent and front the compute (LLM, infrastructure). Use it together with the in-app **Observability & Cost** page to project and monitor costs as you scale users.
+
+It provides cost projections for running the Ghostfolio Agent in production, based on actual development usage data and scaling assumptions.
 
 ## Executive Summary
 

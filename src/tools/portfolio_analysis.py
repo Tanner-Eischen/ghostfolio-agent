@@ -7,7 +7,11 @@ from langchain_core.tools import tool
 from langsmith import traceable
 from pydantic import BaseModel, Field
 
-from src.api.ghostfolio import GhostfolioClient
+from src.api.ghostfolio import (
+    AuthenticationError,
+    GhostfolioAPIError,
+    GhostfolioClient,
+)
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -262,6 +266,19 @@ async def portfolio_analysis(
             # Return dict for JSON-serializable tool output (evals field_present checks)
             return result.model_dump(mode="json")
 
+        except AuthenticationError:
+            logger.warning("Portfolio analysis: Ghostfolio authentication failed")
+            return (
+                "I couldn't access your portfolio. The Ghostfolio connection may not be set up, "
+                "or your access token may be missing or invalid. Please add your Ghostfolio access token "
+                "(from Ghostfolio → Settings → Security) in the configuration so I can fetch your data."
+            )
+        except GhostfolioAPIError as e:
+            logger.warning("Portfolio analysis: Ghostfolio API error: %s", e)
+            return (
+                "I couldn't complete that request to your portfolio. Please check your Ghostfolio configuration "
+                "or try again later. If you need help, ask me how to set up Ghostfolio."
+            )
         except Exception as e:
             logger.error(f"Portfolio analysis failed: {e}")
             raise

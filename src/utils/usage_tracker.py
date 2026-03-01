@@ -11,7 +11,8 @@ Pricing (as of 2024):
 
 import json
 import os
-from datetime import datetime
+import random
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -269,6 +270,56 @@ def reset_usage_log() -> None:
     logger.info("Usage log reset")
 
 
+def seed_demo_usage(
+    entries_per_model: int = 12,
+    days_back: int = 3,
+) -> int:
+    """Append synthetic usage entries for all models to populate observability data.
+
+    Each model gets entries_per_model log entries with plausible token counts
+    and timestamps spread over the last days_back days. Does not call any LLM.
+
+    Args:
+        entries_per_model: Number of fake requests to add per model.
+        days_back: Spread timestamps over this many days into the past.
+
+    Returns:
+        Total number of entries appended.
+    """
+    now = datetime.now(timezone.utc)
+    log = _load_usage_log()
+    total = 0
+    for model_id in MODEL_PRICING:
+        for i in range(entries_per_model):
+            # Vary tokens: input 200-700, output 80-350
+            input_tok = random.randint(200, 700)
+            output_tok = random.randint(80, 350)
+            cost = calculate_cost(input_tok, output_tok, model_id)
+            # Spread over last days_back days
+            delta = timedelta(
+                days=random.randint(0, days_back),
+                seconds=random.randint(0, 86400),
+            )
+            ts = (now - delta).isoformat().replace("+00:00", "Z")
+            entry = {
+                "timestamp": ts,
+                "model": model_id,
+                "input_tokens": input_tok,
+                "output_tokens": output_tok,
+                "total_tokens": input_tok + output_tok,
+                "cost_usd": round(cost, 6),
+                "session_id": f"demo-{model_id}-{i}",
+                "query": None,
+                "metadata": {"seed": True},
+                "run_id": None,
+            }
+            log.append(entry)
+            total += 1
+    _save_usage_log(log)
+    logger.info("Seeded %d demo usage entries across %d models", total, len(MODEL_PRICING))
+    return total
+
+
 __all__ = [
     "log_usage",
     "get_usage_stats",
@@ -276,5 +327,6 @@ __all__ = [
     "get_cost_by_run_id",
     "calculate_cost",
     "reset_usage_log",
+    "seed_demo_usage",
     "MODEL_PRICING",
 ]
