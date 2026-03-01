@@ -7,7 +7,6 @@ import {
   feedbackApi,
   sessionsApi,
   type RepoConnection,
-  type FileNode,
   type HealthResponse,
   type Tool,
   type ChatResponse,
@@ -163,7 +162,6 @@ export function AgentWorkspace() {
   const [connectedRepo, setConnectedRepo] = useState<RepoConnection | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [endpoints, setEndpoints] = useState<ApiEndpoint[]>([]);
-  const [_fileTree, setFileTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Chat state
@@ -216,12 +214,7 @@ export function AgentWorkspace() {
       setHealth(healthData);
 
       if (repo) {
-        const [filesData, pointsData] = await Promise.all([
-          repoApi.getFiles(repo.id, 2).catch(() => null),
-          repoApi.getInjectionPoints(repo.id, 50).catch(() => null),
-        ]);
-
-        if (filesData?.root) setFileTree(filesData.root);
+        const pointsData = await repoApi.getInjectionPoints(repo.id, 50).catch(() => null);
 
         // Convert injection points to API endpoints
         if (pointsData?.points) {
@@ -300,7 +293,6 @@ export function AgentWorkspace() {
     }
     setConnectedRepo(null);
     setEndpoints([]);
-    setFileTree(null);
     setLoading(false);
     showToast('Disconnected', 'success');
   };
