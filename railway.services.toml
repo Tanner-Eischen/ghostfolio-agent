@@ -1,6 +1,10 @@
 # =============================================================================
 # Railway Multi-Service Reference
 # =============================================================================
+# Do NOT add a railway.json at the repo root. It is applied to every service
+# and overrides the frontend, forcing Dockerfile.backend on both. Use the
+# Dashboard to set the Dockerfile path per service (see below).
+#
 # Railway does NOT support "railway up --file" or multiple services in one
 # config. Use the Dashboard to configure each service, then deploy via CLI.
 #
@@ -9,6 +13,8 @@
 #   2. Connect the same GitHub repo to both services
 #   3. Backend service → Settings → Build → Dockerfile path: Dockerfile.backend
 #   4. Frontend service → Settings → Build → Dockerfile path: Dockerfile.frontend
+#      (If you see "set in railway.json" and it says Dockerfile.backend, delete
+#       any root railway.json from the repo so the Dashboard setting is used.)
 #   5. Set variables per service (see below)
 #
 # Deploy (per service):
