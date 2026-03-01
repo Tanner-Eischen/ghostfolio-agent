@@ -422,10 +422,10 @@ def _chat_fallback_message(exc: Exception) -> str:
             "I’m not fully set up yet—the API key for the assistant isn’t configured. "
             "If you’re the person running this app, add the required key in the server configuration and try again."
         )
-    if "authentication" in msg or "access token" in msg or ("401" in msg and "ghostfolio" in msg):
+    if "authentication" in msg or "access token" in msg or ("401" in msg and "ghostfolio" in msg) or "no ghostfolio access token" in msg:
         return (
             "I can’t access your portfolio right now because the Ghostfolio connection isn’t set up or the access token is invalid. "
-            "Please add your Ghostfolio access token (from Ghostfolio → Settings → Security) in the configuration, then try again."
+            "Make sure you've connected Ghostfolio in this app: click your avatar (top right) -> Connect Ghostfolio, paste the token from Ghostfolio Settings -> Security, then click Connect. If you use local Ghostfolio, leave Instance URL empty or set http://localhost:3333."
         )
     if "timeout" in msg or "timed out" in msg:
         return "The request took too long and timed out. Please try again in a moment."

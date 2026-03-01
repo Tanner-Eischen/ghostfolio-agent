@@ -42,11 +42,11 @@ def _friendly_error_message(exc: Exception) -> str:
             "I'm not fully set up yet—the assistant's API key isn't configured. "
             "If you're running this app, add the required key in the server configuration and try again."
         )
-    if "authentication" in msg or "access token" in msg or ("401" in msg and "ghostfolio" in msg):
+    if "authentication" in msg or "access token" in msg or ("401" in msg and "ghostfolio" in msg) or "no ghostfolio access token" in msg:
         return (
-            "I can't access your portfolio right now because the Ghostfolio connection isn't set up or the access token is invalid. "
-            "Please add your Ghostfolio access token (from Ghostfolio → Settings → Security) in the configuration, then try again. "
-            "If you need help, ask me things like “How do I set up Ghostfolio?” or “What do I need to connect my portfolio?”"
+            "I can't access your portfolio right now. In this app, click your avatar (top right) -> Connect Ghostfolio, "
+            "paste the token from Ghostfolio Settings -> Security, then click Connect. "
+            "If you use local Ghostfolio, leave Instance URL empty or set http://localhost:3333."
         )
     if "timeout" in msg or "timed out" in msg:
         return "That request took too long and timed out. Please try again in a moment."
@@ -55,8 +55,9 @@ def _friendly_error_message(exc: Exception) -> str:
     # Generic: still conversational, no raw exception text
     return (
         "Something went wrong while I was handling that. "
-        "You can try rephrasing, or ask me something else—for example “What can you help me with?” or “How do I set up my portfolio connection?”"
+        "You can try rephrasing, or ask me something else—for example "What can you help me with?" or "How do I set up my portfolio connection?""
     )
+
 
 
 class GhostfolioAgent:

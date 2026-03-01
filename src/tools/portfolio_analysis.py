@@ -266,8 +266,8 @@ async def portfolio_analysis(
             # Return dict for JSON-serializable tool output (evals field_present checks)
             return result.model_dump(mode="json")
 
-        except AuthenticationError:
-            logger.warning("Portfolio analysis: Ghostfolio authentication failed")
+        except AuthenticationError as e:
+            logger.warning("Portfolio analysis: Ghostfolio authentication failed: %s", e)
             return (
                 "I couldn't access your portfolio. The Ghostfolio connection may not be set up, "
                 "or your access token may be missing or invalid. Please add your Ghostfolio access token "

@@ -481,6 +481,13 @@ class GhostfolioClient:
             or access_token
             or settings.ghostfolio_access_token
         )
+        if not (self._access_token and str(self._access_token).strip()):
+            self._access_token = None
+            token_source = "none (request header and env both empty)"
+        elif request_token:
+            token_source = "request header"
+        else:
+            token_source = "env/config"
         # User-provided token (stateless): use their URL if sent, else localhost (free local Ghostfolio)
         request_url = get_request_ghostfolio_api_url() if request_token else None
         if request_token and not base_url:
@@ -507,7 +514,7 @@ class GhostfolioClient:
         )
 
         logger.info(
-            f"GhostfolioClient initialized (mock={self._use_mock}, url={self._base_url})"
+            f"GhostfolioClient initialized (mock={self._use_mock}, url={self._base_url}, token={token_source})"
         )
 
     async def _get_headers(self) -> dict[str, str]:
@@ -613,6 +620,15 @@ class GhostfolioClient:
         Raises:
             AuthenticationError: If authentication fails
         """
+        if not self._access_token:
+            logger.warning(
+                "Ghostfolio auth: no token (request header and env both empty). "
+                "User must set token in app: avatar -> Connect Ghostfolio -> paste token -> Connect."
+            )
+            raise AuthenticationError(
+                "No Ghostfolio access token provided. In this app, click your avatar (top right) -> "
+                "Connect Ghostfolio, paste the token from Ghostfolio Settings -> Security, and click Connect."
+            )
         if self._use_mock:
             logger.info("Using mock mode - returning mock token")
             self._bearer_token = "mock_token"
@@ -633,6 +649,11 @@ class GhostfolioClient:
             )
 
             if response.status_code < 200 or response.status_code >= 300:
+                logger.warning(
+                    "Ghostfolio auth rejected: HTTP %s from %s (check token and that Instance URL matches your Ghostfolio)",
+                    response.status_code,
+                    self._base_url,
+                )
                 raise AuthenticationError(
                     f"Authentication failed with status {response.status_code}"
                 )
