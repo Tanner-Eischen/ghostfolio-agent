@@ -55,7 +55,7 @@ def _friendly_error_message(exc: Exception) -> str:
     # Generic: still conversational, no raw exception text
     return (
         "Something went wrong while I was handling that. "
-        "You can try rephrasing, or ask me something else—for example "What can you help me with?" or "How do I set up my portfolio connection?""
+        'You can try rephrasing, or ask me something else—for example "What can you help me with?" or "How do I set up my portfolio connection?"'
     )
 
 
