@@ -19,7 +19,7 @@ const navItems: NavItem[] = [
 
 export function Navigation() {
   const { appMode, setAppMode } = useAppMode();
-  const { isConnected, setToken, clearToken } = useGhostfolioToken();
+  const { isConnected, setToken, clearToken, apiUrl, setApiUrl } = useGhostfolioToken();
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -123,8 +123,23 @@ export function Navigation() {
                   )}
                 </div>
                 <p className="text-xs text-slate-500">
-                  Token from Ghostfolio → Settings → Security. Stored only in this browser.
+                  Run Ghostfolio locally on port <strong>3333</strong>, open{' '}
+                  <strong>http://localhost:3333</strong>, then go to <strong>Settings → Security</strong> to create an access token.
                 </p>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-0.5">Instance URL</label>
+                  <input
+                    type="url"
+                    value={apiUrl}
+                    onChange={(e) => setApiUrl(e.target.value)}
+                    placeholder="http://localhost:3333 (default)"
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-surface-darker border border-surface-border text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    aria-label="Ghostfolio instance URL"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Leave empty for localhost:3333. Use https://ghostfolio.io for cloud (paid).
+                  </p>
+                </div>
                 {isConnected ? (
                   <>
                     <button

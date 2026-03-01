@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.utils.caching import get_cache
 from src.utils.config import get_settings
-from src.utils.request_context import get_request_ghostfolio_token
+from src.utils.request_context import get_request_ghostfolio_token, get_request_ghostfolio_api_url
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -481,9 +481,11 @@ class GhostfolioClient:
             or access_token
             or settings.ghostfolio_access_token
         )
-        # User-provided token (stateless) → use Ghostfolio cloud; else env or arg
+        # User-provided token (stateless): use their URL if sent, else localhost (free local Ghostfolio)
+        request_url = get_request_ghostfolio_api_url() if request_token else None
         if request_token and not base_url:
-            self._base_url = "https://ghostfolio.io"
+            raw = (request_url and request_url.strip()) or "http://localhost:3333"
+            self._base_url = raw.rstrip("/")
         else:
             self._base_url = base_url or settings.ghostfolio_api_url
         self._use_mock = use_mock or settings.use_mock_data

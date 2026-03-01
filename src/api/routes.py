@@ -34,7 +34,10 @@ from src.tools.registry import (
 from src.tools.code_validator import validate_generated_tool, sanitize_tool_name
 from src.agent.core import reload_agent_tools
 from src.utils.config import get_settings
-from src.utils.request_context import REQUEST_GHOSTFOLIO_ACCESS_TOKEN
+from src.utils.request_context import (
+    REQUEST_GHOSTFOLIO_ACCESS_TOKEN,
+    REQUEST_GHOSTFOLIO_API_URL,
+)
 from src.utils.config_store import (
     get_verification_config_store,
     get_strategy_config_store,
@@ -191,19 +194,26 @@ if settings.cors_origin_regex and settings.cors_origin_regex.strip():
     _cors_kw["allow_origin_regex"] = settings.cors_origin_regex
 app.add_middleware(CORSMiddleware, **_cors_kw)
 
-# Per-request Ghostfolio token (stateless: frontend sends X-Ghostfolio-Access-Token)
+# Per-request Ghostfolio token and optional API URL (stateless)
 GHOSTFOLIO_TOKEN_HEADER = "X-Ghostfolio-Access-Token"
+GHOSTFOLIO_API_URL_HEADER = "X-Ghostfolio-Api-Url"
 
 
 @app.middleware("http")
 async def set_request_ghostfolio_token(request: Any, call_next: Any):
-    """Set request-scoped Ghostfolio token from header so tools use it (never stored)."""
+    """Set request-scoped Ghostfolio token and optional API URL from headers."""
     token = request.headers.get(GHOSTFOLIO_TOKEN_HEADER)
     if token and isinstance(token, str):
         token = token.strip() or None
+    api_url = request.headers.get(GHOSTFOLIO_API_URL_HEADER)
+    if api_url and isinstance(api_url, str):
+        api_url = api_url.strip() or None
     old_token = None
+    old_url = None
     if token:
         old_token = REQUEST_GHOSTFOLIO_ACCESS_TOKEN.set(token)
+    if api_url:
+        old_url = REQUEST_GHOSTFOLIO_API_URL.set(api_url)
     try:
         response = await call_next(request)
         return response
@@ -211,6 +221,11 @@ async def set_request_ghostfolio_token(request: Any, call_next: Any):
         if token:
             try:
                 REQUEST_GHOSTFOLIO_ACCESS_TOKEN.reset(old_token)
+            except LookupError:
+                pass
+        if api_url:
+            try:
+                REQUEST_GHOSTFOLIO_API_URL.reset(old_url)
             except LookupError:
                 pass
 

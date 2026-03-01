@@ -2,6 +2,8 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 /** localStorage key for stateless Ghostfolio token (user-provided, sent per request). */
 export const GHOSTFOLIO_TOKEN_STORAGE_KEY = 'ghostfolio_access_token';
+/** Optional Ghostfolio API base URL (e.g. http://localhost:3333 for local). Omit for ghostfolio.io. */
+export const GHOSTFOLIO_API_URL_STORAGE_KEY = 'ghostfolio_api_url';
 
 interface ApiOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -21,6 +23,10 @@ async function fetchApi<T>(endpoint: string, options: ApiOptions = {}): Promise<
     const token = localStorage.getItem(GHOSTFOLIO_TOKEN_STORAGE_KEY);
     if (token?.trim()) {
       reqHeaders['X-Ghostfolio-Access-Token'] = token.trim();
+    }
+    const apiUrl = localStorage.getItem(GHOSTFOLIO_API_URL_STORAGE_KEY);
+    if (apiUrl?.trim()) {
+      reqHeaders['X-Ghostfolio-Api-Url'] = apiUrl.trim();
     }
   }
 
