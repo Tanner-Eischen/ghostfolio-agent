@@ -112,65 +112,60 @@ def get_agent() -> GhostfolioAgent:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler.
-
-    Heavy work (agent init, Git check, repo auto-connect) runs in background so
-    the app becomes ready quickly and /health passes within Railway's window.
-    """
-    import asyncio
-
+    """Application lifespan handler."""
     setup_logging()
     logger.info("Starting Ghostfolio Agent API in %s mode", settings.environment)
 
-    async def init_agent_background() -> None:
-        try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, get_agent)
-            logger.info("Agent pre-initialized on startup")
-        except Exception as e:
-            logger.warning("Could not pre-initialize agent: %s", e)
+    # Pre-initialize agent on startup
+    try:
+        get_agent()
+        logger.info("Agent pre-initialized on startup")
+    except Exception as e:
+        logger.warning("Could not pre-initialize agent: %s", e)
 
-    async def init_repo_background() -> None:
-        try:
-            manager = get_repo_manager()
-            git_ok, git_error = await manager._check_git_available()
-            if not git_ok:
-                logger.warning(
-                    "Git is not available at startup: %s. Repo connect (clone) will fail until Git is installed and in PATH.",
-                    git_error,
+    # Ensure Git is available for repo connect (clone)
+    try:
+        manager = get_repo_manager()
+        git_ok, git_error = await manager._check_git_available()
+        if not git_ok:
+            logger.warning(
+                "Git is not available at startup: %s. Repo connect (clone) will fail until Git is installed and in PATH.",
+                git_error,
+            )
+        else:
+            logger.info("Git is available for repository cloning")
+    except Exception as e:
+        logger.warning("Could not check Git at startup: %s", e)
+
+    # Auto-connect a repo so the developer page is never "Connect a repository" by default
+    try:
+        manager = get_repo_manager()
+        if len(manager.list_connections()) == 0:
+            repo_url = (settings.repo_url or "").strip()
+            if repo_url and repo_url.startswith("http"):
+                req = RepoConnectionRequest(
+                    source=repo_url,
+                    branch=(settings.repo_branch or "main").strip() or None,
                 )
-            else:
-                logger.info("Git is available for repository cloning")
-            if len(manager.list_connections()) == 0:
-                repo_url = (settings.repo_url or "").strip()
-                if repo_url and repo_url.startswith("http"):
-                    req = RepoConnectionRequest(
-                        source=repo_url,
-                        branch=(settings.repo_branch or "main").strip() or None,
-                    )
-                    resp = await manager.connect(req)
-                    if resp.success and resp.connection:
-                        logger.info("Auto-connected to production repo: %s", resp.connection.name)
-                    else:
-                        logger.warning("Auto-connect to REPO_URL failed: %s", getattr(resp, "error", "unknown"))
+                resp = await manager.connect(req)
+                if resp.success and resp.connection:
+                    logger.info("Auto-connected to production repo: %s", resp.connection.name)
                 else:
-                    project_root = Path(__file__).resolve().parent.parent.parent
-                    req = RepoConnectionRequest(
-                        source=str(project_root),
-                        branch=(settings.repo_branch or "main").strip() or None,
-                        name=settings.repo_name or "ghostfolio-agent",
-                    )
-                    resp = await manager.connect(req)
-                    if resp.success and resp.connection:
-                        logger.info("Auto-connected to project repo: %s", resp.connection.name)
-                    else:
-                        logger.warning("Auto-connect to project path failed: %s", getattr(resp, "error", "unknown"))
-        except Exception as e:
-            logger.warning("Startup background init failed: %s", e)
-
-    # Run heavy init in background so /health is reachable quickly (Railway healthcheck window)
-    asyncio.create_task(init_agent_background())
-    asyncio.create_task(init_repo_background())
+                    logger.warning("Auto-connect to REPO_URL failed: %s", getattr(resp, "error", "unknown"))
+            else:
+                project_root = Path(__file__).resolve().parent.parent.parent
+                req = RepoConnectionRequest(
+                    source=str(project_root),
+                    branch=(settings.repo_branch or "main").strip() or None,
+                    name=settings.repo_name or "ghostfolio-agent",
+                )
+                resp = await manager.connect(req)
+                if resp.success and resp.connection:
+                    logger.info("Auto-connected to project repo: %s", resp.connection.name)
+                else:
+                    logger.warning("Auto-connect to project path failed: %s", getattr(resp, "error", "unknown"))
+    except Exception as e:
+        logger.warning("Auto-connect repo failed: %s", e)
 
     yield
 
