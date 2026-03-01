@@ -48,8 +48,9 @@ test_*.py
 *_test.py
 conftest.py
 
-# Development files
+# Development files (include run_uvicorn.py for Docker CMD)
 scripts/
+!scripts/run_uvicorn.py
 *.log
 *.tmp
 
