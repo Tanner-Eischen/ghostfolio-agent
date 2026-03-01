@@ -6,6 +6,7 @@ import {
   toolsApi,
   feedbackApi,
   sessionsApi,
+  GHOSTFOLIO_TOKEN_STORAGE_KEY,
   type RepoConnection,
   type HealthResponse,
   type Tool,
@@ -180,6 +181,14 @@ export function AgentWorkspace() {
   const [sessionsList, setSessionsList] = useState<SessionSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [conversationsOpen, setConversationsOpen] = useState(false);
+
+  // User mode: stateless Ghostfolio token (from localStorage, sent per request)
+  const [userGhostfolioToken, setUserGhostfolioToken] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(GHOSTFOLIO_TOKEN_STORAGE_KEY);
+  });
+  const [showGhostfolioForm, setShowGhostfolioForm] = useState(false);
+  const [ghostfolioInput, setGhostfolioInput] = useState('');
   const refreshSessions = useCallback(async () => {
     setHistoryLoading(true);
     try {
@@ -295,6 +304,25 @@ export function AgentWorkspace() {
     setEndpoints([]);
     setLoading(false);
     showToast('Disconnected', 'success');
+  };
+
+  const handleSaveGhostfolioToken = () => {
+    const t = ghostfolioInput.trim();
+    if (t) {
+      localStorage.setItem(GHOSTFOLIO_TOKEN_STORAGE_KEY, t);
+      setUserGhostfolioToken(t);
+      setGhostfolioInput('');
+      setShowGhostfolioForm(false);
+      showToast('Ghostfolio token saved (used only in this browser)', 'success');
+    }
+  };
+
+  const handleClearGhostfolioToken = () => {
+    localStorage.removeItem(GHOSTFOLIO_TOKEN_STORAGE_KEY);
+    setUserGhostfolioToken(null);
+    setGhostfolioInput('');
+    setShowGhostfolioForm(false);
+    showToast('Ghostfolio token cleared', 'success');
   };
 
   const handleSendMessage = async () => {

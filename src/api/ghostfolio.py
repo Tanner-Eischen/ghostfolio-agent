@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.utils.caching import get_cache
 from src.utils.config import get_settings
+from src.utils.request_context import get_request_ghostfolio_token
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -473,12 +474,24 @@ class GhostfolioClient:
             use_mock: Whether to use mock data
         """
         settings = get_settings()
-        self._base_url = base_url or settings.ghostfolio_api_url
-        self._access_token = access_token or settings.ghostfolio_access_token
+        # Per-request token (stateless) overrides arg and env
+        request_token = get_request_ghostfolio_token()
+        self._access_token = (
+            request_token
+            or access_token
+            or settings.ghostfolio_access_token
+        )
+        # User-provided token (stateless) → use Ghostfolio cloud; else env or arg
+        if request_token and not base_url:
+            self._base_url = "https://ghostfolio.io"
+        else:
+            self._base_url = base_url or settings.ghostfolio_api_url
         self._use_mock = use_mock or settings.use_mock_data
         self._bearer_token: str | None = None
         self._cache = get_cache()
         self._request_count = 0
+        # Don't use shared cache for per-request token (each user's data stays isolated)
+        self._per_request_token = bool(request_token)
 
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -603,12 +616,13 @@ class GhostfolioClient:
             self._bearer_token = "mock_token"
             return self._bearer_token
 
-        # Check cache for existing token
-        cached_token = self._cache.get("ghostfolio:bearer_token")
-        if cached_token:
-            logger.debug("Using cached bearer token")
-            self._bearer_token = cached_token
-            return self._bearer_token
+        # Check cache for existing token (skip when per-request token to avoid cross-user leak)
+        if not self._per_request_token:
+            cached_token = self._cache.get("ghostfolio:bearer_token")
+            if cached_token:
+                logger.debug("Using cached bearer token")
+                self._bearer_token = cached_token
+                return self._bearer_token
 
         try:
             response = await self._client.post(
@@ -627,8 +641,9 @@ class GhostfolioClient:
             if not self._bearer_token:
                 raise AuthenticationError("No token in authentication response")
 
-            # Cache the token
-            self._cache.set("ghostfolio:bearer_token", self._bearer_token)
+            # Cache the token (skip when per-request token)
+            if not self._per_request_token:
+                self._cache.set("ghostfolio:bearer_token", self._bearer_token)
             logger.info("Successfully authenticated with Ghostfolio")
 
             return self._bearer_token
@@ -651,12 +666,13 @@ class GhostfolioClient:
             logger.debug("Returning mock portfolio data")
             return {**MOCK_PORTFOLIO, "last_updated": datetime.utcnow().isoformat()}
 
-        # Check cache
+        # Check cache (skip when per-request token)
         cache_key = "ghostfolio:portfolio"
-        cached = self._cache.get(cache_key)
-        if cached:
-            logger.debug("Returning cached portfolio data")
-            return cached
+        if not self._per_request_token:
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.debug("Returning cached portfolio data")
+                return cached
 
         await self._ensure_authenticated()
 
@@ -699,8 +715,9 @@ class GhostfolioClient:
             "currency": "USD",
             "last_updated": datetime.utcnow().isoformat(),
         }
-        # Cache the result
-        self._cache.set(cache_key, data)
+        # Cache the result (skip when per-request token)
+        if not self._per_request_token:
+            self._cache.set(cache_key, data)
 
         logger.info(f"Retrieved portfolio data with {len(holdings_list)} holdings")
         return data
@@ -715,12 +732,13 @@ class GhostfolioClient:
             logger.debug("Returning mock positions data")
             return MOCK_POSITIONS
 
-        # Check cache
+        # Check cache (skip when per-request token)
         cache_key = "ghostfolio:positions"
-        cached = self._cache.get(cache_key)
-        if cached:
-            logger.debug("Returning cached positions data")
-            return cached
+        if not self._per_request_token:
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.debug("Returning cached positions data")
+                return cached
 
         await self._ensure_authenticated()
 
@@ -751,8 +769,9 @@ class GhostfolioClient:
                 "assetSubClass": h.get("assetSubClass"),
             })
 
-        # Cache the result
-        self._cache.set(cache_key, positions)
+        # Cache the result (skip when per-request token)
+        if not self._per_request_token:
+            self._cache.set(cache_key, positions)
 
         logger.info(f"Retrieved {len(positions)} positions")
         return positions
@@ -808,12 +827,13 @@ class GhostfolioClient:
         if filters:
             params.update(filters)
 
-        # Check cache
+        # Check cache (skip when per-request token)
         cache_key = f"ghostfolio:orders:{hash(frozenset(params.items()))}"
-        cached = self._cache.get(cache_key)
-        if cached:
-            logger.debug("Returning cached orders data")
-            return cached
+        if not self._per_request_token:
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.debug("Returning cached orders data")
+                return cached
 
         await self._ensure_authenticated()
 
@@ -822,8 +842,9 @@ class GhostfolioClient:
         )
         orders = data if isinstance(data, list) else data.get("activities", [])
 
-        # Cache the result
-        self._cache.set(cache_key, orders)
+        # Cache the result (skip when per-request token)
+        if not self._per_request_token:
+            self._cache.set(cache_key, orders)
 
         logger.info(f"Retrieved {len(orders)} orders")
         return orders
@@ -838,20 +859,22 @@ class GhostfolioClient:
             logger.debug("Returning mock accounts data")
             return MOCK_ACCOUNTS
 
-        # Check cache
+        # Check cache (skip when per-request token)
         cache_key = "ghostfolio:accounts"
-        cached = self._cache.get(cache_key)
-        if cached:
-            logger.debug("Returning cached accounts data")
-            return cached
+        if not self._per_request_token:
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.debug("Returning cached accounts data")
+                return cached
 
         await self._ensure_authenticated()
 
         data = await self._request_with_retry("GET", "/api/v1/account")
         accounts = data if isinstance(data, list) else data.get("accounts", [])
 
-        # Cache the result
-        self._cache.set(cache_key, accounts)
+        # Cache the result (skip when per-request token)
+        if not self._per_request_token:
+            self._cache.set(cache_key, accounts)
 
         logger.info(f"Retrieved {len(accounts)} accounts")
         return accounts
@@ -879,12 +902,13 @@ class GhostfolioClient:
             logger.debug(f"Returning mock performance data for {timeframe}")
             return {**MOCK_PERFORMANCE, "timeframe": timeframe, "data_age_seconds": 0}
 
-        # Check cache
+        # Check cache (skip when per-request token)
         cache_key = f"ghostfolio:performance:{timeframe}:{account_id or 'all'}"
-        cached = self._cache.get(cache_key)
-        if cached:
-            logger.debug("Returning cached performance data")
-            return cached
+        if not self._per_request_token:
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.debug("Returning cached performance data")
+                return cached
 
         await self._ensure_authenticated()
 
@@ -901,8 +925,9 @@ class GhostfolioClient:
         data["data_age_seconds"] = 0
         data["last_updated"] = datetime.utcnow().isoformat()
 
-        # Cache the result
-        self._cache.set(cache_key, data)
+        # Cache the result (skip when per-request token)
+        if not self._per_request_token:
+            self._cache.set(cache_key, data)
 
         logger.info(f"Retrieved performance data for {timeframe}")
         return data
@@ -920,19 +945,21 @@ class GhostfolioClient:
             logger.debug("Returning mock public portfolio data")
             return {**MOCK_PORTFOLIO, "access_id": access_id}
 
-        # Check cache
+        # Check cache (skip when per-request token)
         cache_key = f"ghostfolio:public:{access_id}"
-        cached = self._cache.get(cache_key)
-        if cached:
-            logger.debug("Returning cached public portfolio data")
-            return cached
+        if not self._per_request_token:
+            cached = self._cache.get(cache_key)
+            if cached:
+                logger.debug("Returning cached public portfolio data")
+                return cached
 
         data = await self._request_with_retry(
             "GET", f"/api/v1/public/{access_id}/portfolio"
         )
 
-        # Cache the result
-        self._cache.set(cache_key, data)
+        # Cache the result (skip when per-request token)
+        if not self._per_request_token:
+            self._cache.set(cache_key, data)
 
         logger.info(f"Retrieved public portfolio {access_id}")
         return data

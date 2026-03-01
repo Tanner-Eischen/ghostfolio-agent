@@ -34,6 +34,7 @@ from src.tools.registry import (
 from src.tools.code_validator import validate_generated_tool, sanitize_tool_name
 from src.agent.core import reload_agent_tools
 from src.utils.config import get_settings
+from src.utils.request_context import REQUEST_GHOSTFOLIO_ACCESS_TOKEN
 from src.utils.config_store import (
     get_verification_config_store,
     get_strategy_config_store,
@@ -189,6 +190,29 @@ _cors_kw: dict[str, Any] = {
 if settings.cors_origin_regex and settings.cors_origin_regex.strip():
     _cors_kw["allow_origin_regex"] = settings.cors_origin_regex
 app.add_middleware(CORSMiddleware, **_cors_kw)
+
+# Per-request Ghostfolio token (stateless: frontend sends X-Ghostfolio-Access-Token)
+GHOSTFOLIO_TOKEN_HEADER = "X-Ghostfolio-Access-Token"
+
+
+@app.middleware("http")
+async def set_request_ghostfolio_token(request: Any, call_next: Any):
+    """Set request-scoped Ghostfolio token from header so tools use it (never stored)."""
+    token = request.headers.get(GHOSTFOLIO_TOKEN_HEADER)
+    if token and isinstance(token, str):
+        token = token.strip() or None
+    old_token = None
+    if token:
+        old_token = REQUEST_GHOSTFOLIO_ACCESS_TOKEN.set(token)
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        if token:
+            try:
+                REQUEST_GHOSTFOLIO_ACCESS_TOKEN.reset(old_token)
+            except LookupError:
+                pass
 
 
 # ============================================================================
