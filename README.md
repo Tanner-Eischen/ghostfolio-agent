@@ -350,7 +350,7 @@ This project is deployed on Railway. To deploy your own instance (as the service
 1. Fork this repository
 2. Create a new project on [Railway](https://railway.app)
 3. Connect your GitHub repository
-4. **Backend and frontend:** Add two services (or one if you only need the API). In each service’s **Settings → Build**, set **Dockerfile path** explicitly: `Dockerfile.backend` for the API, `Dockerfile.frontend` for the frontend. Do not rely on a root `railway.json`—it applies to every service and forces the same Dockerfile (e.g. backend onto the frontend). See `railway.services.toml` for the full setup.
+4. **Backend and frontend:** Add two services (or one if you only need the API). In each service’s **Settings → Build**, set **Root Directory** to `frontend` and **Config as code file** to `frontend/railway.toml` for the frontend; set **Dockerfile path** to `Dockerfile.backend` for the API. Do not rely on a root `railway.json`—it applies to every service and forces the same Dockerfile (e.g. backend onto the frontend). See `railway.services.toml` for the full setup.
 5. Set the required environment variables (see `.env.example`). These are for your backend only; end users of your deployment only need their Ghostfolio access token.
 6. Deploy!
 

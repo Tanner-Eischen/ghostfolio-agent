@@ -12,10 +12,13 @@
 #   1. Railway Dashboard: New Project → add two services (e.g. "backend", "frontend")
 #   2. Connect the same GitHub repo to both services
 #   3. Backend service → Settings → Build → Dockerfile path: Dockerfile.backend
-#   4. Frontend service → Settings → Build → Dockerfile path: Dockerfile.frontend
-#      (If you see "set in railway.json" and it says Dockerfile.backend, delete
-#       any root railway.json from the repo so the Dashboard setting is used.)
-#   5. Set variables per service (see below)
+#   4. Frontend service: use its own root and config so it never sees backend config:
+#      - Settings → Build → Root Directory: frontend
+#      - Settings → Build → Config as code file: frontend/railway.toml
+#      (That uses frontend/railway.toml + frontend/Dockerfile; no root railway.json.)
+#   5. Backend service → Settings → Build → Dockerfile path: Dockerfile.backend
+#      (No root railway.json in repo; set Dockerfile in Dashboard.)
+#   6. Set variables per service (see below)
 #
 # Deploy (per service):
 #   railway link    # choose backend or frontend

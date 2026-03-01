@@ -1,0 +1,12 @@
+# Frontend-only config. Use this when the frontend service has Root Directory = "frontend".
+# In Railway: Frontend service → Settings → Root Directory = "frontend", Config as code file = "frontend/railway.toml"
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
