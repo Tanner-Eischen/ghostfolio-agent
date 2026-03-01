@@ -15,7 +15,6 @@ import {
 } from '../api/client';
 import { RepoConnector } from '../components/RepoConnector';
 import { ApiCoverage, type ApiEndpoint } from '../components/ApiCoverage';
-import { computeFileStats } from '../components/RepoStats';
 
 import { useAppMode } from '../contexts/AppModeContext';
 
@@ -409,9 +408,6 @@ export function AgentWorkspace() {
       ? 'I can help you understand the codebase and create tools'
       : 'Connect a repository for context-aware assistance')
     : 'I can help you understand your investments and financial data';
-
-  // Calculate file stats
-  const fileStats = fileTree ? computeFileStats(fileTree) : null;
 
   // Tabs to show based on mode
   const visibleTabs: MainTab[] = appMode === 'developer'
