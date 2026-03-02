@@ -25,38 +25,15 @@ from src.utils.session_store import SessionStore
 from src.utils.tracing import configure_langsmith, get_trace_url, is_tracing_enabled, TraceContext
 from src.utils.usage_tracker import log_usage
 from src.verification import VerificationPipeline
+from src.exceptions import get_friendly_error_message
 
 logger = get_logger(__name__)
 
 
 def _friendly_error_message(exc: Exception) -> str:
     """Format an exception as a short, conversational message (no HTTP/tech jargon)."""
-    msg = str(exc).lower()
-    if "invalid_api_key" in msg or ("incorrect api key" in msg and "401" in str(exc)):
-        return (
-            "The OpenAI API key was rejected (invalid or expired). "
-            "Check your key at https://platform.openai.com/account/api-keys and update it in the server configuration."
-        )
-    if "api key" in msg or "openai" in msg:
-        return (
-            "I'm not fully set up yet—the assistant's API key isn't configured. "
-            "If you're running this app, add the required key in the server configuration and try again."
-        )
-    if "authentication" in msg or "access token" in msg or ("401" in msg and "ghostfolio" in msg) or "no ghostfolio access token" in msg:
-        return (
-            "I can't access your portfolio right now. In this app, click your avatar (top right) -> Connect Ghostfolio, "
-            "paste the token from Ghostfolio Settings -> Security, then click Connect. "
-            "If you use local Ghostfolio, leave Instance URL empty or set http://localhost:3333."
-        )
-    if "timeout" in msg or "timed out" in msg:
-        return "That request took too long and timed out. Please try again in a moment."
-    if "rate" in msg and "limit" in msg:
-        return "I'm hitting rate limits from an external service. Please wait a minute and try again."
-    # Generic: still conversational, no raw exception text
-    return (
-        "Something went wrong while I was handling that. "
-        'You can try rephrasing, or ask me something else—for example "What can you help me with?" or "How do I set up my portfolio connection?"'
-    )
+    # Delegate to centralized error message formatting
+    return get_friendly_error_message(exc)
 
 
 

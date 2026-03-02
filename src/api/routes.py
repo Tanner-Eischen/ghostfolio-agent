@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.agent import GhostfolioAgent
+from src.exceptions import get_friendly_error_message
 from src.tools.registry import (
     list_tools as list_registered_tools,
     get_tool_schema,
@@ -350,31 +351,8 @@ async def get_metrics() -> dict[str, Any]:
 
 def _chat_fallback_message(exc: Exception) -> str:
     """Turn an exception into a short, conversational message for the user (no HTTP/tech jargon)."""
-    msg = str(exc).lower()
-    if "invalid_api_key" in msg or ("incorrect api key" in msg and "401" in str(exc)):
-        return (
-            "The OpenAI API key was rejected (invalid or expired). "
-            "Check your key at https://platform.openai.com/account/api-keys and update it in the server configuration."
-        )
-    if "api key" in msg or "openai" in msg:
-        return (
-            "I’m not fully set up yet—the API key for the assistant isn’t configured. "
-            "If you’re the person running this app, add the required key in the server configuration and try again."
-        )
-    if "authentication" in msg or "access token" in msg or ("401" in msg and "ghostfolio" in msg) or "no ghostfolio access token" in msg:
-        return (
-            "I can’t access your portfolio right now because the Ghostfolio connection isn’t set up or the access token is invalid. "
-            "Make sure you've connected Ghostfolio in this app: click your avatar (top right) -> Connect Ghostfolio, paste the token from Ghostfolio Settings -> Security, then click Connect. If you use local Ghostfolio, leave Instance URL empty or set http://localhost:3333."
-        )
-    if "timeout" in msg or "timed out" in msg:
-        return "The request took too long and timed out. Please try again in a moment."
-    if "rate" in msg and "limit" in msg:
-        return "I’m hitting rate limits from an external service. Please wait a minute and try again."
-    # Generic friendly fallback
-    return (
-        "Something went wrong on my side while handling that. "
-        "You can try rephrasing or asking something else (for example: “What can you help me with?” or “How do I set up Ghostfolio?”)."
-    )
+    # Use centralized error message formatting
+    return get_friendly_error_message(exc)
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["Chat"])
