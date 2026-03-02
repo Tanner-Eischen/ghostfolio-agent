@@ -84,9 +84,12 @@ export function Navigation() {
         </nav>
       </div>
 
-      {/* Right side: mode toggle and avatar with dropdown */}
+      {/* Right side: mode toggle (dev only) and avatar with dropdown */}
       <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-        <ModeToggle mode={appMode} onChange={setAppMode} />
+        {/* Hide mode toggle in production builds */}
+        {!import.meta.env.PROD && (
+          <ModeToggle mode={appMode} onChange={setAppMode} />
+        )}
 
         {/* Avatar: circle with dropdown for settings / Connect Ghostfolio */}
         <div className="relative" ref={dropdownRef}>
@@ -123,8 +126,7 @@ export function Navigation() {
                   )}
                 </div>
                 <p className="text-xs text-slate-500">
-                  Run Ghostfolio locally on port <strong>3333</strong>, open{' '}
-                  <strong>http://localhost:3333</strong>, then go to <strong>Settings → Security</strong> to create an access token.
+                  In Ghostfolio go to <strong>Settings → Security</strong> and create an access token. Use either a <strong>ghostfol.io</strong> Premium account, or self-host Ghostfolio (e.g. with Docker) and optionally ngrok for the deployed app.
                 </p>
                 <div>
                   <label className="block text-xs text-slate-400 mb-0.5">Instance URL</label>
@@ -132,12 +134,12 @@ export function Navigation() {
                     type="url"
                     value={apiUrl}
                     onChange={(e) => setApiUrl(e.target.value)}
-                    placeholder="http://localhost:3333 (default)"
+                    placeholder="https://ghostfolio.io or your Ghostfolio URL"
                     className="w-full px-2.5 py-1.5 rounded-lg bg-surface-darker border border-surface-border text-sm text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-primary/50"
                     aria-label="Ghostfolio instance URL"
                   />
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    Leave empty for localhost:3333. Use https://ghostfolio.io for cloud (paid).
+                    Empty = ghostfol.io. Self-hosted + deployed app: use a public URL (e.g. ngrok). Local agent: use http://localhost:3333 or leave empty.
                   </p>
                 </div>
                 {isConnected ? (

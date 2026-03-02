@@ -1,6 +1,7 @@
 """Ghostfolio API Client for interacting with Ghostfolio backend."""
 
 import asyncio
+import hashlib
 from datetime import datetime
 from typing import Any
 
@@ -488,10 +489,11 @@ class GhostfolioClient:
             token_source = "request header"
         else:
             token_source = "env/config"
-        # User-provided token (stateless): use their URL if sent, else localhost (free local Ghostfolio)
+        # User-provided token (stateless): use their URL if sent, else default by environment
         request_url = get_request_ghostfolio_api_url() if request_token else None
         if request_token and not base_url:
-            raw = (request_url and request_url.strip()) or "http://localhost:3333"
+            default_url = "https://ghostfolio.io" if get_settings().is_production else "http://localhost:3333"
+            raw = (request_url and request_url.strip()) or default_url
             raw = raw.rstrip("/")
             # Local Ghostfolio runs over HTTP; normalize https://localhost -> http://localhost
             if raw.lower().startswith("https://localhost"):
@@ -510,6 +512,11 @@ class GhostfolioClient:
         self._request_count = 0
         # Don't use shared cache for per-request token (each user's data stays isolated)
         self._per_request_token = bool(request_token)
+        # Cache keys scoped by base_url so bearer/portfolio for one instance are not reused for another
+        self._url_slug = hashlib.sha256(self._base_url.encode()).hexdigest()[:12] if self._base_url else "default"
+        self._bearer_cache_key = f"ghostfolio:bearer_token:{self._url_slug}"
+        self._portfolio_cache_key = f"ghostfolio:portfolio:{self._url_slug}"
+        self._positions_cache_key = f"ghostfolio:positions:{self._url_slug}"
 
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -563,6 +570,7 @@ class GhostfolioClient:
 
         max_retries = 3
         base_delay = 1.0
+        auth_retried = False
 
         for attempt in range(max_retries):
             try:
@@ -581,6 +589,14 @@ class GhostfolioClient:
                     return response.json()
 
                 if response.status_code == 401:
+                    # Bearer token may have expired; clear cache and re-auth once, then retry
+                    if not auth_retried:
+                        auth_retried = True
+                        self._bearer_token = None
+                        if not self._per_request_token:
+                            self._cache.delete(self._bearer_cache_key)
+                        await self.authenticate()
+                        continue
                     raise AuthenticationError("Authentication failed. Check your access token.")
 
                 if response.status_code == 429:
@@ -645,43 +661,78 @@ class GhostfolioClient:
 
         # Check cache for existing token (skip when per-request token to avoid cross-user leak)
         if not self._per_request_token:
-            cached_token = self._cache.get("ghostfolio:bearer_token")
+            cached_token = self._cache.get(self._bearer_cache_key)
             if cached_token:
                 logger.debug("Using cached bearer token")
                 self._bearer_token = cached_token
                 return self._bearer_token
 
-        try:
-            response = await self._client.post(
-                "/api/v1/auth/anonymous",
-                json={"accessToken": self._access_token},
-            )
-
-            if response.status_code < 200 or response.status_code >= 300:
-                logger.warning(
-                    "Ghostfolio auth rejected: HTTP %s from %s (check token and that Instance URL matches your Ghostfolio)",
-                    response.status_code,
-                    self._base_url,
-                )
-                raise AuthenticationError(
-                    f"Authentication failed with status {response.status_code}"
+        auth_retries = 3
+        last_exc: Exception | None = None
+        for attempt in range(auth_retries):
+            try:
+                response = await self._client.post(
+                    "/api/v1/auth/anonymous",
+                    json={"accessToken": self._access_token},
                 )
 
-            data = response.json()
-            self._bearer_token = data.get("token") or data.get("authToken")
+                if response.status_code < 200 or response.status_code >= 300:
+                    try:
+                        body = response.text
+                        if len(body) > 200:
+                            body = body[:200] + "..."
+                    except Exception:
+                        body = ""
+                    logger.warning(
+                        "Ghostfolio auth rejected: HTTP %s from %s (check token and that Instance URL matches your Ghostfolio). Response: %s",
+                        response.status_code,
+                        self._base_url,
+                        body or "(no body)",
+                    )
+                    msg = f"Authentication failed with status {response.status_code}"
+                    if body and response.status_code == 403:
+                        msg += ". Token may be invalid, expired, or revoked—create a new one in Ghostfolio Settings → Security."
+                    raise AuthenticationError(msg)
 
-            if not self._bearer_token:
-                raise AuthenticationError("No token in authentication response")
+                data = response.json()
+                self._bearer_token = data.get("token") or data.get("authToken")
 
-            # Cache the token (skip when per-request token)
-            if not self._per_request_token:
-                self._cache.set("ghostfolio:bearer_token", self._bearer_token)
-            logger.info("Successfully authenticated with Ghostfolio")
+                if not self._bearer_token:
+                    raise AuthenticationError("No token in authentication response")
 
-            return self._bearer_token
+                # Cache the token (skip when per-request token)
+                if not self._per_request_token:
+                    self._cache.set(self._bearer_cache_key, self._bearer_token)
+                logger.info("Successfully authenticated with Ghostfolio")
 
-        except httpx.RequestError as e:
-            raise AuthenticationError(f"Authentication request failed: {e}")
+                return self._bearer_token
+
+            except httpx.ConnectError as e:
+                last_exc = e
+                if attempt < auth_retries - 1:
+                    delay = 1.0 * (attempt + 1)
+                    logger.warning(
+                        "Ghostfolio auth: connection failed (%s), retrying in %.1fs (%d/%d)",
+                        e,
+                        delay,
+                        attempt + 1,
+                        auth_retries,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise AuthenticationError(
+                        f"Could not reach Ghostfolio at {self._base_url}. "
+                        "Check that Ghostfolio is running and the URL is correct. "
+                        "If using the deployed app with local Ghostfolio, use ngrok or a public URL—the server cannot reach localhost."
+                    ) from e
+            except (AuthenticationError, httpx.RequestError):
+                raise
+
+        if last_exc:
+            raise AuthenticationError(
+                f"Authentication request failed after {auth_retries} attempts: {last_exc}"
+            ) from last_exc
+        raise AuthenticationError("Authentication failed")
 
     async def _ensure_authenticated(self) -> None:
         """Ensure we have a valid bearer token."""
@@ -699,9 +750,8 @@ class GhostfolioClient:
             return {**MOCK_PORTFOLIO, "last_updated": datetime.utcnow().isoformat()}
 
         # Check cache (skip when per-request token)
-        cache_key = "ghostfolio:portfolio"
         if not self._per_request_token:
-            cached = self._cache.get(cache_key)
+            cached = self._cache.get(self._portfolio_cache_key)
             if cached:
                 logger.debug("Returning cached portfolio data")
                 return cached
@@ -749,7 +799,7 @@ class GhostfolioClient:
         }
         # Cache the result (skip when per-request token)
         if not self._per_request_token:
-            self._cache.set(cache_key, data)
+            self._cache.set(self._portfolio_cache_key, data)
 
         logger.info(f"Retrieved portfolio data with {len(holdings_list)} holdings")
         return data
@@ -765,9 +815,8 @@ class GhostfolioClient:
             return MOCK_POSITIONS
 
         # Check cache (skip when per-request token)
-        cache_key = "ghostfolio:positions"
         if not self._per_request_token:
-            cached = self._cache.get(cache_key)
+            cached = self._cache.get(self._positions_cache_key)
             if cached:
                 logger.debug("Returning cached positions data")
                 return cached
@@ -803,7 +852,7 @@ class GhostfolioClient:
 
         # Cache the result (skip when per-request token)
         if not self._per_request_token:
-            self._cache.set(cache_key, positions)
+            self._cache.set(self._positions_cache_key, positions)
 
         logger.info(f"Retrieved {len(positions)} positions")
         return positions
@@ -948,9 +997,20 @@ class GhostfolioClient:
         if account_id:
             params["accountId"] = account_id
 
-        data = await self._request_with_retry(
-            "GET", "/api/v1/portfolio/performance", params=params
-        )
+        try:
+            data = await self._request_with_retry(
+                "GET", "/api/v1/portfolio/performance", params=params
+            )
+        except NotFoundError:
+            # Some Ghostfolio versions or configs don't expose this endpoint; return minimal data so callers still get portfolio/holdings
+            logger.debug("Portfolio performance endpoint not available (404), returning empty performance")
+            return {
+                "timeframe": timeframe,
+                "data_age_seconds": 0,
+                "last_updated": datetime.utcnow().isoformat(),
+                "absolute_change": 0,
+                "relative_change": 0,
+            }
 
         # Add metadata
         data["timeframe"] = timeframe
@@ -997,14 +1057,14 @@ class GhostfolioClient:
         return data
 
     def clear_cache(self) -> None:
-        """Clear all cached data."""
-        self._cache.delete("ghostfolio:bearer_token")
-        self._cache.delete("ghostfolio:portfolio")
-        self._cache.delete("ghostfolio:positions")
+        """Clear all cached data for this instance's URL (and global ghostfolio keys)."""
+        self._cache.delete(self._bearer_cache_key)
+        self._cache.delete(self._portfolio_cache_key)
+        self._cache.delete(self._positions_cache_key)
         self._cache.delete("ghostfolio:accounts")
-        # Clear orders and performance caches (they have dynamic keys)
-        self._cache._cache.clear()  # Clear all cache entries
-        logger.info("Cleared all Ghostfolio cache")
+        # Clear remaining ghostfolio-related entries (orders, performance have dynamic keys)
+        self._cache._cache.clear()
+        logger.info("Cleared Ghostfolio cache")
 
     def get_stats(self) -> dict[str, Any]:
         """Get client statistics.

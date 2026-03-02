@@ -24,8 +24,8 @@ class CacheManager:
         """Get value from cache."""
         return self._cache.get(key)
 
-    def set(self, key: str, value: Any) -> None:
-        """Set value in cache."""
+    def set(self, key: str, value: Any, **kwargs: Any) -> None:
+        """Set value in cache. Accepts optional ttl= for API compatibility (single global TTL is used)."""
         self._cache[key] = value
 
     def delete(self, key: str) -> None:

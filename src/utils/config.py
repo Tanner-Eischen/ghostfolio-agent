@@ -56,6 +56,14 @@ class Settings(BaseSettings):
         use_mock_raw = _read_env_key("USE_MOCK_DATA") if _ENV_FILE.exists() else ""
         if use_mock_raw:
             data = {**data, "use_mock_data": use_mock_raw}
+        # Prefer .env for Ghostfolio so evals and local runs always see .env (process env can override and empty the token)
+        if _ENV_FILE.exists():
+            gf_token = _read_env_key("GHOSTFOLIO_ACCESS_TOKEN")
+            if gf_token:
+                data = {**data, "ghostfolio_access_token": gf_token}
+            gf_url = _read_env_key("GHOSTFOLIO_API_URL")
+            if gf_url:
+                data = {**data, "ghostfolio_api_url": gf_url}
         return data
 
     # Environment
@@ -107,11 +115,6 @@ class Settings(BaseSettings):
     # Cache Configuration
     cache_ttl_seconds: int = 300
     redis_url: str | None = None
-
-    # Repository Configuration (for dashboard)
-    repo_url: str = Field(default="", description="Repository URL (e.g., https://github.com/user/repo)")
-    repo_name: str = Field(default="", description="Repository name (e.g., user/repo)")
-    repo_branch: str = Field(default="", description="Current branch name")
 
     # Security
     secret_key: str = Field(default="change-me-in-production", description="Secret key for sessions")

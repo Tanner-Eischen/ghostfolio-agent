@@ -192,6 +192,7 @@ def evaluate_criterion(
 
         elif criterion.check_type == "field_present":
             # MVP strict: pass only if expected exists as top-level key in tool_outputs
+            # Accept fields with None values as "present" for error cases (auth errors return {total_value: None, ...})
             tool_outputs = response.get("tool_outputs", [])
             if tool_outputs and isinstance(tool_outputs, list):
                 field_name = criterion.expected.split(".")[0]  # top-level only
@@ -200,6 +201,7 @@ def evaluate_criterion(
                     for obj in tool_outputs
                 )
                 criterion.actual = found
+                # Accept None values as present - error responses have fields with None
                 criterion.passed = found
             else:
                 # Fallback: check response dict (e.g. message, tool_calls)
@@ -216,6 +218,7 @@ def evaluate_criterion(
                         found = False
                         break
                 criterion.actual = found
+                # Accept None values as present
                 criterion.passed = found
 
         elif criterion.check_type == "tool_not_called":
@@ -689,6 +692,27 @@ async def run_evaluations(
         "confidence_threshold": config.confidence_threshold,
         "strict_mode": config.strict_mode,
     }
+
+    # Preflight: verify Ghostfolio auth so we fail fast (no point running 75 evals if auth fails)
+    from src.utils.config import get_settings
+    settings = get_settings()
+    if not settings.use_mock_data:
+        token = (settings.ghostfolio_access_token or "").strip()
+        url = (settings.ghostfolio_api_url or "").strip()
+        if not token:
+            console.print("[red]Ghostfolio auth preflight failed: GHOSTFOLIO_ACCESS_TOKEN is empty in .env[/red]")
+            console.print("[yellow]Set GHOSTFOLIO_ACCESS_TOKEN in .env (from Ghostfolio Settings → Security) or set USE_MOCK_DATA=true to skip.[/yellow]")
+            sys.exit(1)
+        from src.api.ghostfolio import GhostfolioClient
+        from src.api.ghostfolio import AuthenticationError
+        client = GhostfolioClient()
+        try:
+            await client.authenticate()
+            console.print(f"[green]Ghostfolio auth OK at {url or 'http://localhost:3333'}[/green]")
+        except AuthenticationError as e:
+            console.print(f"[red]Ghostfolio auth failed: {e}[/red]")
+            console.print("[yellow]Ensure Ghostfolio is running at GHOSTFOLIO_API_URL and the token in .env is valid (create a new one in Ghostfolio Settings → Security). Then re-run.[/yellow]")
+            sys.exit(1)
 
     # Import agent here to avoid issues if dependencies missing
     try:

@@ -1,360 +1,259 @@
 # Ghostfolio Agent
 
-> AI-powered portfolio assistant for [Ghostfolio](https://ghostfol.io) - Analyze, categorize, and assess risk with natural language
+An AI-powered portfolio assistant that sits on top of [Ghostfolio](https://ghostfol.io/), providing natural language access to portfolio analysis, risk assessment, and financial insights.
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Deployed on Railway](https://img.shields.io/badge/deployed-railway-purple)](https://ghostfolio-agent-production-e24d.up.railway.app)
+## What is Ghostfolio?
 
-**Live Demo:** https://ghostfolio-agent-production-e24d.up.railway.app
+[Ghostfolio](https://ghostfol.io/) is a modern, open-source wealth management application that helps you track and analyze your investment portfolio. It offers both:
+- **Ghostfolio Cloud** - A hosted premium service at ghostfol.io
+- **Self-hosted** - Run your own instance via Docker
 
-When offered as a hosted service, end users only need their Ghostfolio access key; the service provider fronts the compute and uses the in-app Observability & Cost page to track usage and projections.
-
-## For people using the service
-
-If you're using a hosted instance of Ghostfolio Agent (e.g. the live demo above), the only thing you need is a **Ghostfolio access token** to connect your portfolio:
-
-1. **Get your token:** In [Ghostfolio](https://ghostfolio.io), go to **Settings → Security** and create an access token.
-2. **Use the app:** Open the service URL; the administrator of your instance configures the Ghostfolio connection. (Per-user "connect your own Ghostfolio account" with your key may be available in a future release.)
-
-You do not need to install anything, set API keys, or run servers.
+Ghostfolio Agent enhances your Ghostfolio experience by adding an AI assistant that understands your portfolio and can answer questions in natural language.
 
 ## Features
 
-- **Portfolio Analysis** - Get insights on holdings, allocation, and performance
-- **Risk Assessment** - Evaluate diversification and concentration risk
-- **Market Data Lookup** - Fetch current prices for stocks, ETFs, and crypto
-- **Verification Layer** - Confidence scoring, escalation signals, and domain checks
-- **MVP Eval Framework** - Atomic, objective pass/fail evals with Streamlit visualization
+- **Natural Language Portfolio Queries** - Ask questions like "What's my portfolio worth?" or "How diversified am I?"
+- **Risk Assessment** - Analyze your portfolio's risk exposure and concentration
+- **Market Data Lookup** - Look up current prices and asset information (Yahoo Finance, CoinGecko)
+- **Transaction Categorization** - Automatically categorize transaction types
+- **Compliance Checking** - Verify portfolio allocations against constraints
+- **Price History** - View historical price data for assets
+- **Trending Crypto** - Get trending cryptocurrency information
+- **Conversation Memory** - Maintains context across multiple queries
+- **Verification Pipeline** - Built-in confidence scoring and fact-checking
 
 ## Quick Start
 
-### Using the hosted app
+### Option A: Use the Hosted App (No Install)
 
-Go to the [live demo](https://ghostfolio-agent-production-e24d.up.railway.app). All you need is your **Ghostfolio access token** (see [For people using the service](#for-people-using-the-service) above for how to get it). No install or API keys required.
+1. **Get a Ghostfolio access token**
+   - **Ghostfolio Cloud users:** Go to Settings > Security, create an access token
+   - **Self-hosted:** Run Ghostfolio locally, then Settings > Security > create token
 
-### For service providers / self-hosting
+2. **Open the app** at [ghostfolio-agent-production-e24d.up.railway.app](https://ghostfolio-agent-production-e24d.up.railway.app)
 
-If you run the Ghostfolio Agent (your own deployment or local), you set the environment variables and run the backend and frontend. End users of your deployment do not set these; they only need their Ghostfolio access token.
+3. **Connect Ghostfolio** - Click your avatar (top right) > Connect Ghostfolio, paste your token and optionally your instance URL
 
-#### Installation
+4. **Start chatting** - Ask "What's my portfolio worth?" or "Am I diversified?"
+
+### Option B: Run Locally
+
+**Prerequisites:** Python 3.11+, Node.js 18+, Git
 
 ```bash
-# Clone the repository
+# Clone and setup
 git clone https://github.com/Tanner-Eischen/ghostfolio-agent.git
 cd ghostfolio-agent
-
-# Create virtual environment (required: pydantic>=2.10 for config to load; the venv avoids version conflicts)
 python -m venv .venv
-source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
-
-# Install dependencies
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-If you see `ImportError: cannot import name 'Secret' from 'pydantic'`, your environment has an old pydantic (e.g. 2.6). Use the project venv and reinstall: `pip install -r requirements.txt` (requirements pin `pydantic>=2.10.0`). On Windows you can run the backend with the venv automatically: `.\scripts\run_backend.ps1`.
-
-#### Requirements
-
-- **Git** – Required for the backend to clone repositories (Repo Connect). Install [Git](https://git-scm.com/) and ensure it is in your PATH. The backend checks Git at startup and reports `dependencies.git` in `/health`.
-
-#### Setup
-
-1. Copy the environment template:
-```bash
+# Configure environment
 cp .env.example .env
-```
+# Edit .env and add your OPENAI_API_KEY
 
-2. Add your API keys to `.env` (required for running the service):
-```bash
-OPENAI_API_KEY=your_key_here
-LANGSMITH_API_KEY=your_key_here
-GHOSTFOLIO_ACCESS_TOKEN=your_token_here
-```
-
-3. **Local Ghostfolio (real portfolio data):** To connect the agent to your own portfolio instead of mock data:
-   - Clone [Ghostfolio](https://github.com/ghostfolio/ghostfolio) and start its server locally (see that repo’s README: usually Postgres + Redis via Docker, then `npm start`).
-   - Open http://localhost:3333, create an account, then go to **Settings → Security** and create an access token.
-   - Put that token in `GHOSTFOLIO_ACCESS_TOKEN` in this project’s `.env` and set `USE_MOCK_DATA=false`.
-   - Keep `GHOSTFOLIO_API_URL=http://localhost:3333` (default).
-
-#### Run the app locally
-
-The app uses a **React (Vite) frontend** that talks to the FastAPI backend. Run both:
-
-**1. Backend (API)** – from the project root:
-
-```bash
-# Start the API server (port 8002 so the frontend proxy works)
+# Run backend (terminal 1)
 uvicorn src.api.routes:app --reload --port 8002
 
-# Or use the CLI (set PORT=8002 in .env to match frontend)
-ghostfolio-agent
+# Run frontend (terminal 2)
+cd frontend && npm install && npm run dev
 ```
 
-**2. Frontend** – in another terminal:
+Open http://localhost:5173 and connect your Ghostfolio account.
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+## Connecting Your Ghostfolio Account
 
-Then open **http://localhost:5173**. The Vite dev server proxies `/api` to the backend on port 8002.
+### Ghostfolio Cloud (Premium Users)
+1. Log in to ghostfol.io
+2. Go to Settings > Security
+3. Generate an access token
+4. In Ghostfolio Agent: avatar > Connect Ghostfolio > paste token (leave URL as default)
 
+### Self-Hosted Ghostfolio
+1. Run Ghostfolio (e.g., via Docker at localhost:3333)
+2. Go to Settings > Security > generate token
+3. In Ghostfolio Agent: avatar > Connect Ghostfolio > enter your URL + paste token
 
-## Usage Examples
+> **Note:** If using the hosted app with a local Ghostfolio, you'll need to expose your local instance (e.g., via ngrok) since the hosted server cannot reach localhost.
 
-### Chat with the Agent
+## Example Queries
 
-```python
-from src.agent.core import GhostfolioAgent
-
-agent = GhostfolioAgent()
-
-# Analyze your portfolio
-response = await agent.chat("What's my portfolio worth?")
-print(response)
-
-# Get risk assessment
-response = await agent.chat("Am I diversified enough?")
-print(response)
-
-# Market data lookup
-response = await agent.chat("Get the latest market data for AAPL and MSFT.")
-print(response)
-```
-
-### Use Individual Tools
-
-```python
-from src.tools import portfolio_analysis, risk_assessment
-
-# Analyze portfolio
-analysis = await portfolio_analysis(timeframe="YTD")
-print(f"Total Value: ${analysis.total_value}")
-print(f"YTD Performance: {analysis.performance.relative_change * 100:.2f}%")
-
-# Assess risk
-risk = await risk_assessment()
-print(f"Risk Score: {risk.overall_risk_score}/100")
-print(f"Recommendations: {risk.recommendations}")
-```
+- "What's my portfolio worth?"
+- "Show me my top 5 holdings"
+- "How diversified is my portfolio?"
+- "What's my risk level?"
+- "Show me my recent transactions"
+- "What's the price of AAPL?"
+- "What crypto do I own?"
 
 ## Architecture
 
 ```
+┌─────────────────────────────────────────────────────────┐
+│                    Frontend (React)                      │
+│                 Vite + TypeScript + Tailwind             │
+└─────────────────────────┬───────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│                 Backend (FastAPI)                        │
+│   REST API + Session Management + Verification          │
+└─────────────────────────┬───────────────────────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          ▼                               ▼
+┌─────────────────────┐       ┌─────────────────────────┐
+│   Ghostfolio API    │       │    AI Agent (LangGraph) │
+│   (Cloud or Local)  │       │    + LangChain Tools    │
+└─────────────────────┘       └─────────────────────────┘
+```
+
+## API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check and dependency status |
+| `POST /chat` | Send a message to the agent |
+| `GET /portfolio` | Quick portfolio summary |
+| `GET /sessions` | List conversation sessions |
+| `DELETE /sessions/{id}` | Clear session history |
+| `GET /tools` | List available tools |
+| `POST /feedback` | Submit feedback |
+
+Full API docs at `/docs` (Swagger) or `/redoc`.
+
+## Configuration
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `OPENAI_API_KEY` | OpenAI API key | Yes |
+| `GHOSTFOLIO_API_URL` | Ghostfolio instance URL | No (defaults to localhost:3333) |
+| `GHOSTFOLIO_ACCESS_TOKEN` | Ghostfolio access token | No (set per-request in app) |
+| `LANGSMITH_API_KEY` | LangSmith API key for tracing | No |
+| `LANGSMITH_TRACING` | Enable LangSmith tracing | No (default: true) |
+| `USE_MOCK_DATA` | Use mock portfolio data | No (default: false) |
+| `ENVIRONMENT` | Environment name | No (default: development) |
+| `PORT` | Server port | No (default: 8000) |
+
+## Project Structure
+
+```
 ghostfolio-agent/
 ├── src/
-│   ├── agent/          # LangChain/LangGraph agent core
-│   │   ├── core.py     # Main agent definition
-│   │   ├── state.py    # State management
-│   │   └── prompts.py  # System prompts
-│   ├── tools/          # LangChain tools
+│   ├── agent/           # LangGraph agent implementation
+│   │   ├── core.py      # Main GhostfolioAgent class
+│   │   ├── prompts.py   # System prompts
+│   │   └── state.py     # Agent state definitions
+│   ├── api/
+│   │   ├── ghostfolio.py    # Ghostfolio API client
+│   │   └── routes.py        # FastAPI routes
+│   ├── tools/           # LangChain tools
 │   │   ├── portfolio_analysis.py
 │   │   ├── risk_assessment.py
 │   │   ├── market_data_lookup.py
-│   │   └── __init__.py
-│   ├── verification/   # Response verification
-│   ├── api/            # API clients & routes
-│   └── utils/          # Utilities
-├── evals/              # Evaluation framework
-├── frontend/           # React (Vite) frontend
-├── tests/              # Test suite
-└── app/                # Optional Streamlit UI
+│   │   └── ...
+│   ├── utils/           # Utilities (config, logging, caching)
+│   └── verification/    # Response verification pipeline
+├── frontend/            # React frontend
+│   └── src/
+│       ├── components/  # React components
+│       ├── pages/       # Page components
+│       └── api/         # API client
+├── tests/               # Test suite
+└── evals/               # Evaluation framework
 ```
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `portfolio_analysis` | Analyze holdings, allocation, performance metrics |
+| `portfolio_analysis` | Analyze portfolio value, holdings, allocation, performance |
 | `risk_assessment` | Evaluate diversification, concentration, volatility |
 | `market_data_lookup` | Fetch current prices from Yahoo Finance/CoinGecko |
+| `transaction_categorize` | Categorize transaction types |
+| `compliance_check` | Check portfolio compliance against constraints |
+| `price_history` | Get historical price data |
+| `trending_crypto` | Get trending cryptocurrency data |
 
 ## Development
 
-### Setup Development Environment
-
 ```bash
-# Clone the repository
-git clone https://github.com/Tanner-Eischen/ghostfolio-agent.git
-cd ghostfolio-agent
-
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # or `.venv\Scripts\activate` on Windows
-
-# Install development dependencies
+# Install dev dependencies
 pip install -e ".[dev]"
-```
 
-### Run Tests
-
-```bash
-# Run all tests
+# Run tests
 pytest
 
 # Run with coverage
 pytest --cov=src --cov-report=html
 
-# Run specific test file
-pytest tests/test_tools/test_portfolio_analysis.py
-```
-
-### Run Evaluations
-
-```bash
-# Validate schema and cases
-python evals/run_evals.py --category mvp --validate
-
-# Run MVP evals
-python evals/run_evals.py --category mvp
-
-# Run and save report for Streamlit
-python evals/run_evals.py --category mvp --save
-```
-
-### Eval Schema (MVP)
-
-Each eval case uses an atomic criteria format:
-
-- `id`, `category`, `input`, `description`
-- `expected_tool_calls`, `expected_output_fields`
-- `criteria[]` where `check_type` is one of:
-  - `tool_called`
-  - `field_present`
-
-`field_present` passes only when the expected field exists as a top-level key in at least one object inside `tool_outputs`.
-
-## Configuration
-
-The variables below are for **whoever runs the backend** (the service provider). End users of your deployment do not set these.
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENAI_API_KEY` |  API key | Required |
-| `LANGCHAIN_API_KEY` | LangSmith API key for tracing | Required for tracing |
-| `LANGCHAIN_TRACING_V2` | Enable LangSmith tracing | `true` |
-| `LANGCHAIN_PROJECT` | LangSmith project name | `ghostfolio-agent` |
-| `GHOSTFOLIO_API_URL` | Ghostfolio instance URL | `http://localhost:3333` |
-| `USE_MOCK_DATA` | Use mock data for development | `false` |
-| `CACHE_TTL_SECONDS` | Cache TTL for market data | `300` |
-| `LOG_LEVEL` | Logging level | `INFO` |
-
-### LangSmith Tracing Setup
-
-The agent automatically integrates with [LangSmith](https://smith.langchain.com/) for observability:
-
-1. **Get your LangSmith API key:**
-   - Go to [LangSmith](https://smith.langchain.com/)
-   - Create a free account or sign in
-   - Go to Settings → API Keys → Create API Key
-
-2. **Add to your `.env` file:**
-   ```bash
-   LANGSMITH_API_KEY=lsv2_pt_xxxxxxxx
-   LANGSMITH_TRACING=true
-   LANGSMITH_PROJECT=AgentForge
-   ```
-
-3. **View traces:**
-   - All agent calls are automatically traced
-   - View in LangSmith dashboard under your project
-   - Each response includes a `trace_url` for direct access
-
-**What gets traced:**
-- Agent conversations (input/output)
-- Tool calls and results
-- LLM token usage
-- Verification pipeline results
-- Response confidence scores
-
-**Log user feedback:**
-```python
-# After a conversation, log feedback
-response = await agent.chat_with_context("What's my portfolio worth?", session_id="user-123")
-agent.log_user_feedback("user-123", score=1.0, key="thumbs_up")
-```
-
-## Evaluation Results
-
-**69 test cases, 100% pass rate**
-
-| Category | Count | Pass Rate |
-|----------|-------|-----------|
-| Happy Path | 25 | 100% |
-| Edge Cases | 17 | 100% |
-| Adversarial | 14 | 100% |
-| Correctness | 13 | 100% |
-
-```bash
 # Run evaluations
-python evals/run_evals.py --save --output results.json
+python evals/run_evals.py --validate
+python evals/run_evals.py --category mvp --save
+
+# Format and lint
+black src tests
+ruff check src tests
+mypy src
 ```
-
-## AI Cost Analysis (for service providers)
-
-As the service provider, you front the compute (LLM, infrastructure). Use the **Observability & Cost** page in the app to monitor real usage and the projections below to plan costs as you scale users.
-
-### Development Costs
-- **LLM:** GPT-4o-mini
-- **Total API calls:** ~2,000 during development
-- **Total tokens:** ~500K input / ~200K output
-- **Estimated spend:** ~$5 USD
-
-### Production Projections (per month)
-
-| Users | Queries/User/Day | Est. Cost/Month |
-|-------|------------------|-----------------|
-| 100 | 10 | ~$2 |
-| 1,000 | 10 | ~$20 |
-| 10,000 | 10 | ~$200 |
-| 100,000 | 10 | ~$2,000 |
-
-**Assumptions:** 500 input tokens, 200 output tokens per query; GPT-4o-mini pricing. See [docs/COST_ANALYSIS.md](docs/COST_ANALYSIS.md) for detailed breakdowns.
-
-## Tech Stack
-
-- **Agent Framework**: LangChain + LangGraph
-- **LLM**: OpenAI GPT-4o-mini (configurable)
-- **Observability**: LangSmith
-- **Backend**: FastAPI
-- **Frontend**: React (Vite)
-- **Testing**: pytest, pytest-asyncio (432 tests)
-
-## Contributing
-
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- [Ghostfolio](https://ghostfol.io) - Open Source Wealth Management Software
-- [LangChain](https://langchain.com) - Agent framework
-- [Anthropic](https://anthropic.com) - Claude AI
-
-## Support
-
-- 📖 [Documentation](https://github.com/Tanner-Eischen/ghostfolio-agent#readme)
-- 🐛 [Issue Tracker](https://github.com/Tanner-Eischen/ghostfolio-agent/issues)
-- 💬 [Discussions](https://github.com/Tanner-Eischen/ghostfolio-agent/discussions)
 
 ## Deployment
 
-This project is deployed on Railway. To deploy your own instance (as the service provider):
+### Docker
 
-1. Fork this repository
-2. Create a new project on [Railway](https://railway.app)
-3. Connect your GitHub repository
-4. **Backend and frontend:** Add two services (or one if you only need the API). In each service’s **Settings → Build**, set **Root Directory** to `frontend` and **Config as code file** to `frontend/railway.toml` for the frontend; set **Dockerfile path** to `Dockerfile.backend` for the API. Do not rely on a root `railway.json`—it applies to every service and forces the same Dockerfile (e.g. backend onto the frontend). See `railway.services.toml` for the full setup.
-5. Set the required environment variables (see `.env.example`). These are for your backend only; end users of your deployment only need their Ghostfolio access token.
-6. Deploy!
+```bash
+docker build -t ghostfolio-agent .
+docker run -p 8000:8000 --env-file .env ghostfolio-agent
+```
 
-Required environment variables (service provider):
-- `OPENAI_API_KEY` - Your OpenAI API key
-- `SECRET_KEY` - Random string for session encryption
-- `LANGSMITH_API_KEY` - For observability (optional)
+### Railway
+
+This project is deployed on Railway. See `railway.services.toml` for configuration.
+
+To deploy your own:
+1. Fork the repository
+2. Create a Railway project and connect your repo
+3. Set environment variables (`OPENAI_API_KEY`, `SECRET_KEY`)
+4. Deploy
+
+## Tech Stack
+
+**Backend:**
+- Python 3.11+
+- FastAPI
+- LangChain & LangGraph
+- OpenAI GPT-4o-mini
+- Pydantic
+
+**Frontend:**
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS
+
+**Infrastructure:**
+- Docker
+- Railway
+- LangSmith (tracing)
+
+## Cost Analysis
+
+Running this agent requires:
+- **OpenAI API costs** - ~$0.15 per 1M input tokens, ~$0.60 per 1M output tokens (GPT-4o-mini)
+- **Hosting** - Railway starter plan (~$5/month)
+
+Estimated monthly cost for moderate usage (10 queries/user/day):
+- 100 users: ~$2/month
+- 1,000 users: ~$20/month
+
+Use the Observability & Cost page in the app to monitor usage.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Acknowledgments
+
+- [Ghostfolio](https://ghostfol.io/) - The wealth management platform this agent extends
+- [LangChain](https://langchain.com/) - Agent framework
+- [OpenAI](https://openai.com/) - Language models

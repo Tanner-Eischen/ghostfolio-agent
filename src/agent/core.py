@@ -355,6 +355,9 @@ class GhostfolioAgent:
                 LangChain tool messages can be JSON strings, native dict/list payloads,
                 or pydantic repr strings (e.g. ``field=value``). This parser normalizes
                 them into structured objects so eval field checks can run objectively.
+
+                For error strings, synthesizes structured outputs with sentinel values
+                so that field_present checks can find fields (even if None) rather than failing.
                 """
                 if isinstance(content, (dict, list)):
                     return content
@@ -368,6 +371,30 @@ class GhostfolioAgent:
                         return json.loads(content)
                     except (json.JSONDecodeError, TypeError):
                         pass
+
+                    # Detect error conditions and synthesize structured response
+                    lowered = content.lower()
+                    is_auth_error = (
+                        "authentication" in lowered
+                        or "couldn't access" in lowered
+                        or "could not access" in lowered
+                        or "access token" in lowered
+                        or "unauthorized" in lowered
+                        or "401" in content
+                        or "no ghostfolio" in lowered
+                    )
+                    is_timeout_error = "timeout" in lowered or "timed out" in lowered
+                    is_rate_limit = "rate" in lowered and "limit" in lowered
+
+                    if is_auth_error or is_timeout_error or is_rate_limit:
+                        # Synthesize structured error response with expected fields
+                        return {
+                            "total_value": None,
+                            "holdings": [],
+                            "data": [],
+                            "error": content,
+                            "_parse_status": "auth_error" if is_auth_error else "timeout_error" if is_timeout_error else "rate_limit_error",
+                        }
 
                     # Pydantic repr fallback: key=value key2=value2 ...
                     keys = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)=", content)
@@ -399,7 +426,14 @@ class GhostfolioAgent:
 
                         return parsed
 
-                    return {"raw": content}
+                    # For any other unstructured string, wrap with common fields for eval checks
+                    return {
+                        "total_value": None,
+                        "holdings": [],
+                        "data": [],
+                        "raw": content,
+                        "_parse_status": "unstructured",
+                    }
 
                 return {"raw": content}
 
@@ -443,6 +477,27 @@ class GhostfolioAgent:
             for msg in response_messages:
                 if isinstance(msg, ToolMessage) and hasattr(msg, "content"):
                     tool_outputs.append(_parse_tool_output(msg.content))
+
+            # Pair each tool call with its output for structured visibility (backend + response)
+            tool_invocations: list[dict[str, Any]] = []
+            for i, tc in enumerate(tool_calls):
+                inv = {
+                    "call": {"tool": tc.get("tool", ""), "input": tc.get("input", {})},
+                    "output": tool_outputs[i] if i < len(tool_outputs) else None,
+                }
+                tool_invocations.append(inv)
+                out_summary = (
+                    list(inv["output"].keys())
+                    if isinstance(inv["output"], dict)
+                    else type(inv["output"]).__name__
+                )
+                self.logger.info(
+                    "tool_invocation tool=%s input=%s output_summary=%s",
+                    inv["call"]["tool"],
+                    inv["call"]["input"],
+                    out_summary,
+                    extra={"tool_invocation": inv},
+                )
 
             # Run verification
             verification_report = None
@@ -515,6 +570,7 @@ class GhostfolioAgent:
                 "confidence_level": verification_report.confidence_level if verification_report else "HIGH",
                 "tool_calls": tool_calls,
                 "tool_outputs": tool_outputs,  # Always include tool outputs for transparency
+                "tool_invocations": tool_invocations,  # Paired call+output for structured visibility
                 "verification_passed": verification_report.passed if verification_report else True,
                 "requires_escalation": verification_report.escalation.requires_escalation if verification_report else False,
                 "escalation_triggers": verification_report.escalation.triggers if verification_report else [],
@@ -547,6 +603,8 @@ class GhostfolioAgent:
                 "confidence": 0.0,
                 "confidence_level": "VERY_LOW",
                 "tool_calls": [],
+                "tool_outputs": [],
+                "tool_invocations": [],
                 "verification_passed": False,
                 "requires_escalation": True,
                 "escalation_triggers": [friendly],

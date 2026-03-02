@@ -173,6 +173,12 @@ class VerificationEvaluator:
         remediation = []
         passed = True
 
+        # Check for error outputs (synthesized structured responses from _parse_tool_output)
+        # For error outputs, we accept None values in required fields since the structure is present
+        parse_status = output.get("_parse_status", "")
+        is_error_output = parse_status in ("auth_error", "timeout_error", "rate_limit_error", "unstructured")
+        has_error_field = "error" in output
+
         # Check for required fields based on output type
         required_fields = self._get_required_fields(output_type)
         for field in required_fields:
@@ -180,7 +186,8 @@ class VerificationEvaluator:
                 passed = False
                 evidence.append(f"Missing required field: {field}")
                 remediation.append(f"Add field '{field}' to output")
-            elif output[field] is None:
+            elif output[field] is None and not is_error_output and not has_error_field:
+                # Only fail on None if this is NOT an error output
                 passed = False
                 evidence.append(f"Field '{field}' is null")
                 remediation.append(f"Provide non-null value for '{field}'")

@@ -72,3 +72,39 @@ BACKEND_URL = "http://backend.railway.internal:8000"
 # Optional settings
 ENVIRONMENT = "production"
 LOG_LEVEL = "INFO"
+
+# =============================================================================
+# Ghostfolio (Demo) — optional service for live demo
+# =============================================================================
+# Manual setup in Railway Dashboard so the deployed agent has a reachable
+# Ghostfolio instance for evaluators. Not created by default.
+#
+# 1. New Service → Deploy from Docker Image → Image: ghostfolio/ghostfolio:latest
+# 2. In the same project, add: Database → PostgreSQL, and Database → Redis
+# 3. Ghostfolio service → Variables (reference DB/Redis or set explicitly):
+#    ACCESS_TOKEN_SALT = "<random string, e.g. UUID>"
+#    JWT_SECRET_KEY = "<random string, e.g. UUID>"
+#    DATABASE_URL = "${{Postgres.DATABASE_URL}}"
+#    REDIS_HOST = "${{Redis.REDIS_HOST}}"
+#    REDIS_PORT = "${{Redis.REDIS_PORT}}"
+#    REDIS_PASSWORD = "${{Redis.REDIS_PASSWORD}}"
+#    PORT = "3333"
+# 4. Ghostfolio service → Settings → Networking → Generate Domain
+# 5. After deploy: open the Ghostfolio URL, create account, Settings → Security → create access token
+# 6. In the agent app, set Instance URL to the Ghostfolio public URL and paste the token
+# =============================================================================
+
+# [[services]]
+# name = "ghostfolio-demo"
+# image = "ghostfolio/ghostfolio:latest"
+# healthcheckPath = "/api/v1/health"
+# healthcheckTimeout = 10
+#
+# [services.variables]
+# ACCESS_TOKEN_SALT = ""
+# JWT_SECRET_KEY = ""
+# DATABASE_URL = "${{Postgres.DATABASE_URL}}"
+# REDIS_HOST = "${{Redis.REDIS_HOST}}"
+# REDIS_PORT = "${{Redis.REDIS_PORT}}"
+# REDIS_PASSWORD = "${{Redis.REDIS_PASSWORD}}"
+# PORT = "3333"

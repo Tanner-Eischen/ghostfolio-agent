@@ -3,12 +3,7 @@ import { AppModeProvider } from '../../contexts/AppModeContext';
 import { GhostfolioTokenProvider } from '../../contexts/GhostfolioTokenContext';
 import { Navigation } from './Navigation';
 
-interface LayoutProps {
-  showAlertBar?: boolean;
-  alertMessage?: string;
-}
-
-export function Layout(_props?: LayoutProps) {
+export function Layout() {
   return (
     <AppModeProvider>
       <GhostfolioTokenProvider>

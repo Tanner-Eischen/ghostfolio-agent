@@ -88,7 +88,12 @@ export interface ChatRequest {
   message: string;
   session_id?: string;
   user_id?: string;
-  repo_id?: string;
+}
+
+/** One structured tool invocation: call (tool name + input) and its output */
+export interface ToolInvocation {
+  call: { tool: string; input: Record<string, unknown> };
+  output: unknown;
 }
 
 export interface ChatResponse {
@@ -101,6 +106,8 @@ export interface ChatResponse {
     result?: unknown;
   }>;
   tool_outputs: unknown[];  // Tool execution results
+  /** Structured list of { call: { tool, input }, output } for each tool invocation */
+  tool_invocations?: ToolInvocation[];
   session_id: string;
   verification_passed: boolean;
   requires_escalation: boolean;
@@ -162,136 +169,6 @@ export const marketApi = {
   get: (symbol: string) => fetchApi<Record<string, unknown>>(`/market/${symbol}`),
 };
 
-// Repo API (new)
-export interface RepoInfo {
-  name: string;
-  version: string;
-  status: string;
-  endpoints: number;
-  services: number;
-  tool_hooks: number;
-}
-
-export interface DependencyNode {
-  id: string;
-  name: string;
-  type: 'agent' | 'service' | 'database' | 'api' | string;
-  icon: string;
-  color: 'primary' | 'indigo' | 'emerald' | 'slate' | string;
-  file_count?: number;
-  line_count?: number;
-  external_deps?: string[];
-  has_circular?: boolean;
-}
-
-export interface DependencyEdge {
-  source: string;
-  target: string;
-  label?: string;
-  weight?: number;
-  import_types?: string[];
-}
-
-export interface DependenciesGraph {
-  nodes: DependencyNode[];
-  edges: DependencyEdge[];
-}
-
-// Repo Connection types
-export interface RepoConnectionRequest {
-  source: string;
-  branch?: string;
-  name?: string;
-}
-
-export interface RepoConnection {
-  id: string;
-  name: string;
-  source: string;
-  branch?: string;
-  path: string;
-  connected_at: string;
-  is_local: boolean;
-}
-
-export interface RepoConnectionResponse {
-  success: boolean;
-  connection?: RepoConnection;
-  error?: string;
-}
-
-export interface ConnectionsListResponse {
-  connections: RepoConnection[];
-}
-
-export const repoApi = {
-  // Get ghostfolio-agent's own repo info (legacy endpoint)
-  get: () => fetchApi<RepoInfo>('/repo'),
-  getDependencies: () => fetchApi<DependenciesGraph>('/repo/dependencies'),
-
-  // New connection-based endpoints
-  connect: (request: RepoConnectionRequest) =>
-    fetchApi<RepoConnectionResponse>('/repo/connect', { method: 'POST', body: request }),
-  disconnect: (repoId: string) =>
-    fetchApi<{ success: boolean }>(`/repo/${repoId}`, { method: 'DELETE' }),
-  listConnections: () =>
-    fetchApi<ConnectionsListResponse>('/repo/connections'),
-
-  // Connected repo analysis
-  getConnected: (repoId: string) =>
-    fetchApi<RepoInfo>(`/repo/${repoId}`),
-  getConnectedDependencies: (repoId: string) =>
-    fetchApi<DependenciesGraph>(`/repo/${repoId}/dependencies`),
-
-  // Drill-down into a specific module
-  getModuleDependencies: (repoId: string, moduleName: string) =>
-    fetchApi<DependenciesGraph>(`/repo/${repoId}/dependencies/${moduleName}`),
-
-  // File explorer and code preview
-  getFiles: (repoId: string, maxDepth?: number) =>
-    fetchApi<FileTreeResponse>(`/repo/${repoId}/files${maxDepth ? `?max_depth=${maxDepth}` : ''}`),
-  getFileContent: (repoId: string, path: string) =>
-    fetchApi<{ path: string; content: string }>(`/repo/${repoId}/file?path=${encodeURIComponent(path)}`),
-  getInjectionPoints: (repoId: string, limit?: number) =>
-    fetchApi<InjectionPointsResponse>(`/repo/${repoId}/injection-points${limit ? `?limit=${limit}` : ''}`),
-  getInsights: (repoId: string) =>
-    fetchApi<CodebaseInsight>(`/repo/${repoId}/insights`),
-};
-
-// File Explorer types
-export interface FileNode {
-  name: string;
-  path: string;
-  type: 'file' | 'directory';
-  children?: FileNode[];
-}
-
-export interface FileTreeResponse {
-  root: FileNode;
-}
-
-// Injection Points types
-export interface InjectionPoint {
-  file_path: string;
-  line_number: number;
-  code_snippet: string[];
-  route_type: string;
-  route_path: string;
-}
-
-export interface InjectionPointsResponse {
-  points: InjectionPoint[];
-  total: number;
-}
-
-// Codebase Insights types
-export interface CodebaseInsight {
-  summary: string;
-  entry_points: string[];
-  architecture: string;
-  recommendations: string[];
-}
-
 // Strategy API (new)
 export interface StrategyConfig {
   framework: string;
@@ -345,10 +222,10 @@ export interface ToolRegistrationResponse {
 export const toolsApi = {
   list: () => fetchApi<Tool[]>('/tools'),
   get: (toolName: string) => fetchApi<ToolDetail>(`/tools/${toolName}`),
-  execute: (toolName: string, params: Record<string, unknown>, repoId?: string) =>
+  execute: (toolName: string, params: Record<string, unknown>) =>
     fetchApi<ToolExecuteResponse>(`/tools/${toolName}/execute`, {
       method: 'POST',
-      body: { parameters: params, repo_id: repoId },
+      body: { parameters: params },
     }),
   create: (tool: Omit<Tool, 'id'>) => fetchApi<Tool>('/tools', { method: 'POST', body: tool }),
   register: (request: ToolRegistrationRequest) =>
@@ -374,7 +251,6 @@ export interface ToolExecuteResponse {
   success: boolean;
   result: unknown;
   execution_time_ms: number;
-  repo_context: string | null;
 }
 
 // Verification API (new)
@@ -555,57 +431,6 @@ export const agentApi = {
   getConfig: () => fetchApi<AgentConfig>('/agent/config'),
   putConfig: (config: { model: string }) =>
     fetchApi<AgentConfig>('/agent/config', { method: 'PUT', body: config }),
-};
-
-// Tool Suggestions API (Page 2 - Tool Library)
-export interface ToolSuggestionParameter {
-  name: string;
-  type: string;
-  description: string;
-  required: boolean;
-}
-
-export interface ToolSuggestion {
-  id: string;
-  name: string;
-  description: string;
-  source_type: string;
-  source_file: string | null;
-  source_line: number | null;
-  parameters: ToolSuggestionParameter[];
-  priority: string;
-  reasoning: string;
-}
-
-export interface ToolSuggestionsResponse {
-  repo_id: string;
-  repo_name: string;
-  suggestions: ToolSuggestion[];
-  total_suggestions: number;
-  analysis_summary: string;
-}
-
-export interface GeneratedToolResponse {
-  id: string;
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  generated_code: string;
-  status: string;
-  source_suggestion_id: string;
-}
-
-export interface GenerateToolRequest {
-  suggestion_id: string;
-  custom_name?: string;
-  custom_description?: string;
-}
-
-export const toolSuggestionsApi = {
-  getForRepo: (repoId: string) =>
-    fetchApi<ToolSuggestionsResponse>(`/repo/${repoId}/tool-suggestions`),
-  generateTool: (repoId: string, request: GenerateToolRequest) =>
-    fetchApi<GeneratedToolResponse>(`/repo/${repoId}/generate-tool`, { method: 'POST', body: request }),
 };
 
 // Feedback API

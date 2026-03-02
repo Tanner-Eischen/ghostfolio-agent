@@ -10,8 +10,19 @@ It provides cost projections for running the Ghostfolio Agent in production, bas
 |--------|-------|
 | Default Model | GPT-4o-mini |
 | Avg Cost per Query | ~$0.001 - $0.002 |
-| Estimated Monthly Cost (1K users, 10 queries/day) | ~$300 - $600 |
+| Estimated Monthly Cost (1K users, 10 queries/day) | ~$180 - $300 |
 | Verification Overhead | ~20% additional tokens |
+
+### Production cost projections (PDF submission format)
+
+| Users | Monthly cost ($/month) |
+|-------|-------------------------|
+| 100 | ~$18 |
+| 1,000 | ~$180 |
+| 10,000 | ~$1,800 |
+| 100,000 | ~$18,000 |
+
+*Assumptions: 10 queries per user per day; ~600 tokens per query (400 in / 200 out); GPT-4o-mini pricing. See tables below for detail.*
 
 ---
 

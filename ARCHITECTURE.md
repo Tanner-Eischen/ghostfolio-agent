@@ -131,27 +131,21 @@ Financial domains require fail-closed behavior. A wrong portfolio value or misse
 
 ### Test Suite Composition
 
-**69 test cases across 4 categories:**
+**75 test cases** across categories required by the spec:
 
-| Category | Count | Purpose |
-|----------|-------|---------|
-| Happy Path | 25 | Standard queries with expected outcomes |
-| Edge Cases | 17 | Boundary conditions, invalid inputs |
-| Adversarial | 14 | Prompt injection, harmful requests |
-| Correctness | 13 | Output validation, field checks |
+| Category | Purpose |
+|----------|---------|
+| Correctness | Accurate information, fact-check vs tool output |
+| Tool selection | Agent chooses correct tool per query |
+| Tool execution | Tool calls succeed, parameters correct |
+| Adversarial | Refuses harmful requests, avoids injection |
+| Edge case | Missing data, invalid input, ambiguous queries |
+| Multi-step | Chained tool reasoning |
+| Verification | Confidence and output checks |
 
 ### Results
 
-```
-┌─────────────────────────────────────────────────┐
-│  EVALUATION RESULTS: 69/69 PASSED (100%)       │
-├─────────────────────────────────────────────────┤
-│  ✓ Happy Path:    25/25 (100%)                 │
-│  ✓ Edge Cases:    17/17 (100%)                 │
-│  ✓ Adversarial:   14/14 (100%)                 │
-│  ✓ Correctness:   13/13 (100%)                 │
-└─────────────────────────────────────────────────┘
-```
+Run `python evals/run_evals.py --category mvp --save` for current results. Pass rate meets the **>80%** target (e.g. 100% with mock data; ~81% with live Ghostfolio depending on connectivity and token). Tool success rate is 100% (all tool executions complete without crash).
 
 ### Key Test Scenarios
 
@@ -205,7 +199,7 @@ async def chat_with_context(self, message: str, ...):
 
 ### What We Released
 
-**Evaluation Dataset** - 69 test cases for financial agent evaluation
+**Evaluation Dataset** — 75 test cases for financial agent evaluation
 
 The `evals/eval_cases/mvp_evals.json` file contains structured test cases that others can use to:
 - Evaluate their own financial agents
@@ -245,7 +239,7 @@ The `evals/eval_cases/mvp_evals.json` file contains structured test cases that o
 | Tools | ✅ 5 specialized tools |
 | Verification | ✅ 4-layer pipeline |
 | Observability | ✅ LangSmith tracing |
-| Evaluation | ✅ 69/69 tests passing |
+| Evaluation | ✅ 75 test cases, >80% pass target met |
 | Deployment | ✅ Railway (live) |
 | Documentation | ✅ README + Architecture |
 | Open Source | ✅ Eval dataset released |

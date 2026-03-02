@@ -25,6 +25,10 @@ def mock_agent():
         "confidence": 85.0,
         "confidence_level": "HIGH",
         "tool_calls": [{"tool": "portfolio_analysis", "input": {}}],
+        "tool_outputs": [{"total_value": 100000}],
+        "tool_invocations": [
+            {"call": {"tool": "portfolio_analysis", "input": {}}, "output": {"total_value": 100000}},
+        ],
         "verification_passed": True,
         "requires_escalation": False,
         "metadata": {"processing_time_ms": 500.0, "tools_used": 1},
@@ -325,149 +329,14 @@ class TestResponseModels:
         assert isinstance(data["confidence"], (int, float))
         assert isinstance(data["confidence_level"], str)
         assert isinstance(data["tool_calls"], list)
+        assert isinstance(data["tool_invocations"], list)
+        assert len(data["tool_invocations"]) == 1
+        assert data["tool_invocations"][0]["call"]["tool"] == "portfolio_analysis"
+        assert "output" in data["tool_invocations"][0]
         assert isinstance(data["session_id"], str)
         assert isinstance(data["verification_passed"], bool)
         assert isinstance(data["requires_escalation"], bool)
         assert isinstance(data["processing_time_ms"], (int, float))
-
-
-class TestRepoConnectEndpoint:
-    """Tests for POST /repo/connect."""
-
-    def test_connect_empty_source_returns_error(self, client):
-        """Validation: empty source returns success=False with message."""
-        response = client.post(
-            "/repo/connect",
-            json={"source": "   "},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is False
-        assert "error" in data
-        assert "empty" in data["error"].lower() or "source" in data["error"].lower()
-
-    def test_connect_invalid_protocol_returns_error(self, client):
-        """Validation: file protocol returns success=False."""
-        response = client.post(
-            "/repo/connect",
-            json={"source": "file:///etc/passwd"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is False
-        assert "error" in data
-        assert "not allowed" in data["error"].lower() or "protocol" in data["error"].lower()
-
-    def test_connect_embedded_credentials_returns_error(self, client):
-        """Validation: embedded credentials in URL return success=False."""
-        response = client.post(
-            "/repo/connect",
-            json={"source": "https://user:secret@github.com/user/repo.git"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is False
-        assert "error" in data
-
-    @patch("src.api.routes.get_repo_manager")
-    def test_connect_success_returns_connection(self, mock_get_manager, client):
-        """Successful connect returns success=True and connection."""
-        from src.repo.manager import RepoManager, RepoConnection, RepoConnectionResponse
-        manager = MagicMock(spec=RepoManager)
-        manager.connect = AsyncMock(
-            return_value=RepoConnectionResponse(
-                success=True,
-                connection=RepoConnection(
-                    id="abc12345",
-                    name="test-repo",
-                    source="https://github.com/user/repo.git",
-                    path="/tmp/repos/abc12345",
-                    connected_at="2020-01-01T00:00:00",
-                    is_local=False,
-                ),
-            )
-        )
-        mock_get_manager.return_value = manager
-
-        response = client.post(
-            "/repo/connect",
-            json={"source": "https://github.com/user/repo.git"},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert "connection" in data
-        assert data["connection"]["id"] == "abc12345"
-        assert data["connection"]["name"] == "test-repo"
-
-
-class TestRepoConnectionsList:
-    """Tests for GET /repo/connections."""
-
-    def test_list_connections_returns_200(self, client):
-        """List connections returns 200 and connections array."""
-        response = client.get("/repo/connections")
-        assert response.status_code == 200
-        data = response.json()
-        assert "connections" in data
-        assert isinstance(data["connections"], list)
-
-
-class TestRepoAnalysisEndpointsStaleId:
-    """Tests for repo analysis endpoints with missing/stale repo_id (404)."""
-
-    @pytest.fixture
-    def client_with_empty_repo_manager(self, client):
-        """Use a repo manager that has no connections."""
-        with patch("src.api.routes.get_repo_manager") as mock_get:
-            manager = MagicMock()
-            manager.get_repo_path.return_value = None
-            manager.get_connection.return_value = None
-            manager.list_connections.return_value = []
-            mock_get.return_value = manager
-            yield client
-
-    def test_get_repo_info_404_for_unknown_id(self, client_with_empty_repo_manager):
-        """GET /repo/{repo_id} returns 404 for unknown repo_id."""
-        response = client_with_empty_repo_manager.get("/repo/nonexistent-id")
-        assert response.status_code == 404
-        data = response.json()
-        assert "detail" in data
-        assert "not found" in data["detail"].lower()
-
-    def test_get_repo_files_404_for_unknown_id(self, client_with_empty_repo_manager):
-        """GET /repo/{repo_id}/files returns 404 for unknown repo_id."""
-        response = client_with_empty_repo_manager.get("/repo/nonexistent-id/files")
-        assert response.status_code == 404
-        assert "not found" in response.json().get("detail", "").lower()
-
-    def test_get_repo_dependencies_404_for_unknown_id(self, client_with_empty_repo_manager):
-        """GET /repo/{repo_id}/dependencies returns 404 for unknown repo_id."""
-        response = client_with_empty_repo_manager.get("/repo/nonexistent-id/dependencies")
-        assert response.status_code == 404
-        assert "not found" in response.json().get("detail", "").lower()
-
-    def test_get_repo_injection_points_404_for_unknown_id(self, client_with_empty_repo_manager):
-        """GET /repo/{repo_id}/injection-points returns 404 for unknown repo_id."""
-        response = client_with_empty_repo_manager.get("/repo/nonexistent-id/injection-points")
-        assert response.status_code == 404
-        assert "not found" in response.json().get("detail", "").lower()
-
-    def test_get_repo_insights_404_for_unknown_id(self, client_with_empty_repo_manager):
-        """GET /repo/{repo_id}/insights returns 404 for unknown repo_id."""
-        response = client_with_empty_repo_manager.get("/repo/nonexistent-id/insights")
-        assert response.status_code == 404
-        assert "not found" in response.json().get("detail", "").lower()
-
-
-class TestRepoDisconnect:
-    """Tests for DELETE /repo/{repo_id}."""
-
-    def test_disconnect_404_for_unknown_id(self, client):
-        """DELETE /repo/{repo_id} returns 404 for unknown repo_id."""
-        response = client.delete("/repo/nonexistent-id")
-        assert response.status_code == 404
-        assert "not found" in response.json().get("detail", "").lower()
 
 
 class TestErrorHandling:

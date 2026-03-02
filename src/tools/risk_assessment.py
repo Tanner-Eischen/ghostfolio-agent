@@ -343,12 +343,14 @@ def get_risk_level(score: float) -> str:
 async def risk_assessment(
     portfolio_data: dict | None = None,
 ) -> RiskAssessmentResult:
-    """Assess portfolio risk including diversification, concentration, and volatility.
+    """Assess portfolio risk including diversification, concentration, sector allocation, and volatility.
 
     Use this tool when the user asks about:
     - How risky their portfolio is
-    - Whether they're diversified enough
-    - Concentration in specific holdings
+    - Diversification (whether they're diversified enough, diversification score or analysis)
+    - Sector concentration, sector allocation, or which sectors they're exposed to
+    - Concentration in specific holdings or assets
+    - Risk score, risk level, or risk assessment
     - Risk reduction recommendations
 
     Args:
@@ -374,7 +376,7 @@ async def risk_assessment(
 
             if not holdings_data:
                 logger.warning("No holdings data available for risk assessment")
-                return RiskAssessmentResult(
+                empty_result = RiskAssessmentResult(
                     overall_risk_score=0.0,
                     risk_level="LOW",
                     concentration_risk=ConcentrationRisk(
@@ -385,6 +387,7 @@ async def risk_assessment(
                     recommendations=["Add holdings to your portfolio to begin tracking risk"],
                     last_updated=datetime.utcnow().isoformat(),
                 )
+                return empty_result.model_dump(mode="json")
 
             # Calculate concentration risk score
             concentration_score, single_asset_max, max_symbol = calculate_concentration_score(
@@ -508,7 +511,7 @@ async def risk_assessment(
                 f"Risk assessment complete: score={overall_score:.1f}, level={risk_level}"
             )
 
-            return result
+            return result.model_dump(mode="json")
 
         except AuthenticationError as e:
             logger.warning("Risk assessment: Ghostfolio authentication failed: %s", e)

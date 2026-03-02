@@ -1,19 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   healthApi,
-  repoApi,
   chatApi,
   toolsApi,
   feedbackApi,
   sessionsApi,
-  type RepoConnection,
   type HealthResponse,
   type Tool,
   type ChatResponse,
   type SessionSummary,
 } from '../api/client';
-import { RepoConnector } from '../components/RepoConnector';
-import { ApiCoverage, type ApiEndpoint } from '../components/ApiCoverage';
 
 import { useAppMode } from '../contexts/AppModeContext';
 
@@ -102,15 +98,31 @@ function ChatMessage({
             dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
           />
 
-          {/* Tool calls */}
+          {/* Tool calls - collapsible sections with JSON args and results */}
           {toolCalls && toolCalls.length > 0 && (
             <div className="mt-3 pt-3 border-t border-surface-border">
-              <div className="text-xs text-slate-400 mb-2">Tools used:</div>
-              <div className="flex flex-wrap gap-1">
+              <div className="text-xs text-slate-400 mb-2">Tools used ({toolCalls.length}):</div>
+              <div className="space-y-1">
                 {toolCalls.map((tc, i) => (
-                  <span key={i} className="px-2 py-0.5 bg-surface-darker rounded text-xs text-slate-300">
-                    {tc.name}
-                  </span>
+                  <details key={i} className="bg-surface-darker rounded border border-surface-border">
+                    <summary className="px-3 py-2 text-xs font-mono text-primary cursor-pointer hover:bg-surface-dark">
+                      {tc.name}
+                    </summary>
+                    <div className="px-3 py-2 border-t border-surface-border">
+                      <div className="text-[10px] text-slate-500 mb-1">Arguments</div>
+                      <pre className="text-xs text-slate-300 font-mono overflow-x-auto">
+                        {JSON.stringify(tc.args, null, 2)}
+                      </pre>
+                      {tc.result !== undefined && (
+                        <>
+                          <div className="text-[10px] text-slate-500 mb-1 mt-2">Result</div>
+                          <pre className="text-xs text-slate-300 font-mono overflow-x-auto max-h-48">
+                            {JSON.stringify(tc.result, null, 2)}
+                          </pre>
+                        </>
+                      )}
+                    </div>
+                  </details>
                 ))}
               </div>
             </div>
@@ -158,10 +170,7 @@ function ChatMessage({
 export function AgentWorkspace() {
   const { appMode } = useAppMode();
 
-  // Repo state
-  const [connectedRepo, setConnectedRepo] = useState<RepoConnection | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [endpoints, setEndpoints] = useState<ApiEndpoint[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Chat state
@@ -208,33 +217,6 @@ export function AgentWorkspace() {
     setToasts(prev => [...prev, { id, message, type }]);
   };
 
-  // Fetch repo data
-  const fetchRepoData = useCallback(async (repo: RepoConnection | null) => {
-    try {
-      const healthData = await healthApi.check();
-      setHealth(healthData);
-
-      if (repo) {
-        const pointsData = await repoApi.getInjectionPoints(repo.id, 50).catch(() => null);
-
-        // Convert injection points to API endpoints
-        if (pointsData?.points) {
-          const apiEndpoints: ApiEndpoint[] = pointsData.points.map(p => ({
-            path: p.route_path,
-            method: p.route_type,
-            file_path: p.file_path,
-            line_number: p.line_number,
-          }));
-          setEndpoints(apiEndpoints);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch repo data:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   // Load tools
   const loadTools = useCallback(async () => {
     setToolsLoading(true);
@@ -252,22 +234,17 @@ export function AgentWorkspace() {
   useEffect(() => {
     async function init() {
       try {
-        const response = await repoApi.listConnections();
-        if (response.connections && response.connections.length > 0) {
-          const connection = response.connections[0];
-          setConnectedRepo(connection);
-          fetchRepoData(connection);
-        } else {
-          fetchRepoData(null);
-        }
+        const healthData = await healthApi.check();
+        setHealth(healthData);
       } catch (error) {
-        console.error('Failed to load connections:', error);
-        fetchRepoData(null);
+        console.error('Failed to load health:', error);
+      } finally {
+        setLoading(false);
       }
       loadTools();
     }
     init();
-  }, [fetchRepoData, loadTools]);
+  }, [loadTools]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -275,28 +252,6 @@ export function AgentWorkspace() {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages]);
-
-  // Handlers
-  const handleConnected = (connection: RepoConnection) => {
-    setConnectedRepo(connection);
-    setLoading(true);
-    fetchRepoData(connection);
-    showToast(`Connected to ${connection.name}`, 'success');
-  };
-
-  const handleDisconnect = async () => {
-    if (connectedRepo) {
-      try {
-        await repoApi.disconnect(connectedRepo.id);
-      } catch (e) {
-        console.error('Failed to disconnect:', e);
-      }
-    }
-    setConnectedRepo(null);
-    setEndpoints([]);
-    setLoading(false);
-    showToast('Disconnected', 'success');
-  };
 
   const handleSendMessage = async () => {
     if (!input.trim() || chatLoading) return;
@@ -310,13 +265,28 @@ export function AgentWorkspace() {
       const response: ChatResponse = await chatApi.send({
         message: userMessage,
         session_id: sessionId,
-        repo_id: appMode === 'developer' ? connectedRepo?.id : undefined,
       });
+
+      // Normalize tool calls: API sends { tool, input } and optionally tool_invocations; UI expects { name, args, result }
+      const rawInvocations = response.tool_invocations ?? [];
+      const rawCalls = response.tool_calls ?? [];
+      const rawOutputs = response.tool_outputs ?? [];
+      const toolCalls = rawInvocations.length > 0
+        ? rawInvocations.map((inv: { call?: { tool?: string; input?: Record<string, unknown> }; output?: unknown }) => ({
+            name: inv.call?.tool ?? 'unknown',
+            args: inv.call?.input ?? {},
+            result: inv.output,
+          }))
+        : rawCalls.map((tc: { tool?: string; name?: string; input?: Record<string, unknown>; args?: Record<string, unknown> }, idx: number) => ({
+            name: tc.tool ?? tc.name ?? 'unknown',
+            args: tc.input ?? tc.args ?? {},
+            result: rawOutputs[idx],
+          }));
 
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: response.response,
-        toolCalls: response.tool_calls,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         runId: response.run_id || undefined,
       }]);
       refreshSessions();
@@ -341,11 +311,6 @@ export function AgentWorkspace() {
     } catch (e) {
       console.error('Failed to send feedback:', e);
     }
-  };
-
-  const handleGenerateTool = (endpoint: ApiEndpoint) => {
-    setActiveTab('tools');
-    showToast(`Generate tool for ${endpoint.path} - coming soon`, 'success');
   };
 
   // Load sessions list on mount and keep sidebar visible
@@ -393,13 +358,11 @@ export function AgentWorkspace() {
 
   // Welcome message based on mode
   const welcomeTitle = appMode === 'developer'
-    ? (connectedRepo ? `Ask about ${connectedRepo.name}` : 'Connect a Repository')
+    ? 'Developer'
     : 'Ask About Your Portfolio';
 
   const welcomeSubtitle = appMode === 'developer'
-    ? (connectedRepo
-      ? 'I can help you understand the codebase and create tools'
-      : 'Connect a repository for context-aware assistance')
+    ? 'Chat, inspect tools, and view traces'
     : 'I can help you understand your investments and financial data';
 
   // Tabs to show based on mode
@@ -438,37 +401,11 @@ export function AgentWorkspace() {
             <span className="material-symbols-outlined text-lg">history</span>
             <span>Conversations</span>
           </button>
-          {appMode === 'developer' && (
-            connectedRepo ? (
-              <>
-                <span className="hidden sm:inline text-sm text-white truncate max-w-[100px] md:max-w-none">{connectedRepo.name}</span>
-                <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] shrink-0">Connected</span>
-                <button onClick={handleDisconnect} className="text-xs text-red-400 hover:text-red-300 shrink-0">Disconnect</button>
-              </>
-            ) : (
-              <RepoConnector
-                onConnected={handleConnected}
-                onDisconnect={handleDisconnect}
-                connectedRepo={null}
-              />
-            )
-          )}
         </div>
       </div>
 
-      {/* Main content: optional left sidebar (dev, lg+) | center | history sidebar (md+) or drawer (mobile) */}
+      {/* Main content: center | history sidebar (md+) or drawer (mobile) */}
       <div className="flex flex-1 min-h-0">
-        {/* Left sidebar: API Coverage (Developer mode only, lg+) */}
-        {appMode === 'developer' && (
-          <div className="hidden lg:flex w-80 border-r border-surface-border flex-shrink-0 overflow-hidden">
-            <ApiCoverage
-              endpoints={endpoints}
-              repoName={connectedRepo?.name || 'No repo'}
-              onGenerateTool={handleGenerateTool}
-            />
-          </div>
-        )}
-
         {/* Center: Chat with tabs */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Tab bar (developer: Chat / Tools / Traces; user: Chat only) */}
@@ -570,7 +507,7 @@ export function AgentWorkspace() {
                       onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
                       placeholder={
                         appMode === 'developer'
-                          ? (connectedRepo ? `Ask about ${connectedRepo.name}...` : 'Type a message...')
+                          ? 'Type a message...'
                           : 'Ask about your portfolio...'
                       }
                       className="flex-1 min-w-0 bg-surface-darker border border-surface-border rounded-lg px-3 py-2.5 sm:px-4 text-sm sm:text-base text-white placeholder-slate-500 focus:outline-none focus:border-primary/50"
