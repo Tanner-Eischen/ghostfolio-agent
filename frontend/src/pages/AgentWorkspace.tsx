@@ -343,6 +343,23 @@ export function AgentWorkspace() {
     refreshSessions();
   }, [refreshSessions]);
 
+  const handleDeleteSession = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await sessionsApi.clear(id);
+      if (id === sessionId) {
+        setSessionId(`session-${Date.now()}`);
+        setMessages([]);
+      }
+      refreshSessions();
+      showToast('Conversation deleted', 'success');
+    } catch (err) {
+      console.error('Failed to delete conversation:', err);
+      showToast('Failed to delete conversation', 'error');
+    }
+  }, [sessionId, refreshSessions]);
+
   // Suggested questions based on mode
   const suggestedQuestions = appMode === 'developer' ? [
     'What are the main entry points in this codebase?',
@@ -603,11 +620,11 @@ export function AgentWorkspace() {
             ) : (
               <ul className="space-y-1">
                 {sessionsList.map((s) => (
-                  <li key={s.session_id}>
+                  <li key={s.session_id} className="flex items-center gap-1 group">
                     <button
                       type="button"
                       onClick={() => loadSession(s.session_id)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                      className={`flex-1 min-w-0 text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                         s.session_id === sessionId
                           ? 'bg-primary/20 text-primary'
                           : 'text-slate-300 hover:bg-surface-dark hover:text-white'
@@ -616,10 +633,19 @@ export function AgentWorkspace() {
                       <span className="block truncate font-mono text-xs text-slate-500 mb-0.5">
                         {s.session_id.slice(0, 16)}...
                       </span>
-                      <span className="block text-slate-400 text-xs">
-                        {s.message_count} message{s.message_count !== 1 ? 's' : ''}
-                        {s.last_accessed ? ` · ${formatHistoryDate(s.last_accessed)}` : ''}
-                      </span>
+                      {s.last_accessed && (
+                        <span className="block text-slate-400 text-xs">
+                          {formatHistoryDate(s.last_accessed)}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleDeleteSession(s.session_id, e)}
+                      className="p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-surface-dark opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                      aria-label="Delete conversation"
+                    >
+                      <span className="material-symbols-outlined text-lg">delete</span>
                     </button>
                   </li>
                 ))}
@@ -665,11 +691,11 @@ export function AgentWorkspace() {
               ) : (
                 <ul className="space-y-1">
                   {sessionsList.map((s) => (
-                    <li key={s.session_id}>
+                    <li key={s.session_id} className="flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => loadSession(s.session_id)}
-                        className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors touch-manipulation ${
+                        className={`flex-1 min-w-0 text-left px-3 py-2.5 rounded-lg text-sm transition-colors touch-manipulation ${
                           s.session_id === sessionId
                             ? 'bg-primary/20 text-primary'
                             : 'text-slate-300 hover:bg-surface-dark hover:text-white'
@@ -678,10 +704,19 @@ export function AgentWorkspace() {
                         <span className="block truncate font-mono text-xs text-slate-500 mb-0.5">
                           {s.session_id.slice(0, 16)}...
                         </span>
-                        <span className="block text-slate-400 text-xs">
-                          {s.message_count} message{s.message_count !== 1 ? 's' : ''}
-                          {s.last_accessed ? ` · ${formatHistoryDate(s.last_accessed)}` : ''}
-                        </span>
+                        {s.last_accessed && (
+                          <span className="block text-slate-400 text-xs">
+                            {formatHistoryDate(s.last_accessed)}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteSession(s.session_id, e)}
+                        className="p-2 rounded text-slate-500 hover:text-red-400 hover:bg-surface-dark shrink-0 touch-manipulation"
+                        aria-label="Delete conversation"
+                      >
+                        <span className="material-symbols-outlined text-lg">delete</span>
                       </button>
                     </li>
                   ))}

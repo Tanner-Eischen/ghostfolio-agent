@@ -108,6 +108,7 @@ Thumbs.db
 # Application specific
 *.log
 logs/
+server.log
 *.pid
 
 # Streamlit
@@ -133,6 +134,7 @@ secrets.json
 .claude/
 .cursor/
 .ai_completion/
+agent-transcripts/
 
 # LangSmith / LangChain local data
 .langchain/
@@ -170,6 +172,5 @@ frontend/.env
 frontend/.env.local
 frontend/.env.*.local
 
-# Local planning/audit artifacts (optional: remove from ignore if you want them in repo)
-# *.plan.md
-# G4_*.md
+# Local planning/audit artifacts
+*.plan.md
