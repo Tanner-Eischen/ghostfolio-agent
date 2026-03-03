@@ -30,20 +30,19 @@ async def list_sessions() -> SessionsListResponse:
         List of sessions with summaries
     """
     store = get_session_store()
-    sessions = store.list_sessions()
+    raw_sessions = store.list_sessions()
 
     session_summaries = []
-    for session_id in sessions:
+    for s in raw_sessions:
+        session_id = s["session_id"]
         history = store.get_history(session_id)
         if history:
-            first_msg = history[0] if history else None
-            last_msg = history[-1] if history else None
-
+            last_accessed = s.get("last_accessed") or ""
             session_summaries.append(SessionSummary(
                 session_id=session_id,
                 message_count=len(history),
-                created_at=first_msg.get("timestamp", "") if first_msg else "",
-                last_activity=last_msg.get("timestamp", "") if last_msg else "",
+                created_at=last_accessed,
+                last_activity=last_accessed,
             ))
 
     return SessionsListResponse(
@@ -68,8 +67,11 @@ async def get_session_history(session_id: str) -> SessionHistoryResponse:
     if not history:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
-    # Calculate session creation time
-    created_at = history[0].get("timestamp", "") if history else ""
+    # Calculate session creation time from message metadata
+    first_msg = history[0]
+    created_at = ""
+    if hasattr(first_msg, "additional_kwargs"):
+        created_at = first_msg.additional_kwargs.get("timestamp", "")
 
     return SessionHistoryResponse(
         session_id=session_id,
