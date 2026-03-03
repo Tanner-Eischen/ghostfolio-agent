@@ -48,7 +48,7 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8501}
       # Docker-specific settings
       - PYTHONPATH=/app
-    command: uvicorn src.api.routes:app --host 0.0.0.0 --port 8000
+    command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

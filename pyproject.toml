@@ -73,7 +73,7 @@ dev = [
 ]
 
 [project.scripts]
-ghostfolio-agent = "src.api.routes:run_server"
+ghostfolio-agent = "src.api.app:run_server"
 
 [project.urls]
 Homepage = "https://github.com/ghostfolio-agent/ghostfolio-agent"

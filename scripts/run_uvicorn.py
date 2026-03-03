@@ -11,7 +11,7 @@ sys.stderr.flush()
 
 import uvicorn
 uvicorn.run(
-    "src.api.routes:app",
+    "src.api.app:app",
     host=host,
     port=port,
     factory=False,

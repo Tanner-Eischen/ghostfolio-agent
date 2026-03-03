@@ -80,4 +80,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Default command (can be overridden in docker-compose or Railway)
 # Uses PORT environment variable for Railway compatibility
-CMD uvicorn src.api.routes:app --host 0.0.0.0 --port ${PORT:-8000}
+CMD uvicorn src.api.app:app --host 0.0.0.0 --port ${PORT:-8000}

@@ -4,7 +4,7 @@ Calls the backend /agent/config and /chat so usage is logged and traces appear
 in LangSmith. Run with backend at BASE_URL (default http://localhost:8002).
 
 Start the backend first, e.g.:
-  uvicorn src.api.routes:app --reload --port 8002
+  uvicorn src.api.app:app --reload --port 8002
 
 Usage:
   python scripts/run_demo_activity.py [--base-url URL] [--requests-per-model N]

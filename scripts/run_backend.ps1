@@ -14,5 +14,5 @@ if (-not (Test-Path $venvPython)) {
 }
 
 Set-Location $root
-& $venvPython -m uvicorn src.api.routes:app --reload --port $Port
+& $venvPython -m uvicorn src.api.app:app --reload --port $Port
 w
