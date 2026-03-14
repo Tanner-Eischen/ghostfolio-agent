@@ -75,6 +75,10 @@ function ChatMessage({
   runId,
   sessionId,
   onFeedback,
+  confidence,
+  confidenceLevel,
+  verificationPassed,
+  requiresEscalation,
 }: {
   role: 'user' | 'assistant';
   content: string;
@@ -82,6 +86,10 @@ function ChatMessage({
   runId?: string;
   sessionId?: string;
   onFeedback?: (rating: number) => void;
+  confidence?: number;
+  confidenceLevel?: string;
+  verificationPassed?: boolean;
+  requiresEscalation?: boolean;
 }) {
   const [feedbackGiven, setFeedbackGiven] = useState<number | null>(null);
 
@@ -126,6 +134,33 @@ function ChatMessage({
                 ))}
               </div>
             </div>
+          )}
+
+          {/* Verification status - collapsible section */}
+          {confidence !== undefined && (
+            <details className="mt-2 text-xs text-slate-400">
+              <summary className="cursor-pointer hover:text-slate-300">
+                <span className={`${
+                  confidence >= 80 ? 'text-emerald-400' :
+                  confidence >= 60 ? 'text-yellow-400' :
+                  'text-red-400'
+                }`}>
+                  {confidence.toFixed(0)}% confidence
+                </span>
+                {confidenceLevel && <span className="ml-1 text-slate-500">({confidenceLevel})</span>}
+                {verificationPassed === false && (
+                  <span className="ml-2 text-amber-400">- verification flagged</span>
+                )}
+                {requiresEscalation && (
+                  <span className="ml-2 text-red-400">- review recommended</span>
+                )}
+              </summary>
+              <div className="mt-1 pl-2 text-slate-500">
+                {toolCalls?.map(t => <div key={t.name}>Tool: {t.name}</div>)}
+                {verificationPassed === false && <div>Verification checks did not pass</div>}
+                {requiresEscalation && <div>Human review recommended</div>}
+              </div>
+            </details>
           )}
         </div>
 
@@ -179,6 +214,10 @@ export function AgentWorkspace() {
     content: string;
     toolCalls?: Array<{ name: string; args: Record<string, unknown>; result?: unknown }>;
     runId?: string;
+    confidence?: number;
+    confidenceLevel?: string;
+    verificationPassed?: boolean;
+    requiresEscalation?: boolean;
   }>>([]);
   const [input, setInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -288,6 +327,10 @@ export function AgentWorkspace() {
         content: response.response,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         runId: response.run_id || undefined,
+        confidence: response.confidence,
+        confidenceLevel: response.confidence_level,
+        verificationPassed: response.verification_passed,
+        requiresEscalation: response.requires_escalation,
       }]);
       refreshSessions();
     } catch (error) {
@@ -368,10 +411,20 @@ export function AgentWorkspace() {
     'What are the key dependencies?',
   ] : [
     'What is my current portfolio value?',
-    'How are my investments performing?',
+    'How are my investments performing YTD?',
     'What is my asset allocation?',
+    'How diversified is my portfolio?',
+    'What is my largest holding?',
+    'Show me my recent transactions',
+    'What is the price of AAPL?',
     'Any suggestions for my portfolio?',
   ];
+
+  // Disclaimer state
+  const [disclaimerDismissed, setDisclaimerDismissed] = useState(() => {
+    const saved = localStorage.getItem('disclaimerDismissed');
+    return saved === 'true';
+  });
 
   // Welcome message based on mode
   const welcomeTitle = appMode === 'developer'
@@ -467,6 +520,28 @@ export function AgentWorkspace() {
                       </div>
                       <h2 className="text-base sm:text-lg font-medium text-white mb-2">{welcomeTitle}</h2>
                       <p className="text-xs sm:text-sm text-slate-400 mb-4 max-w-md">{welcomeSubtitle}</p>
+
+                      {/* Investment Disclaimer */}
+                      {!disclaimerDismissed && appMode !== 'developer' && (
+                        <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg max-w-md text-left">
+                          <span className="material-symbols-outlined text-amber-400 text-sm mt-0.5 shrink-0">info</span>
+                          <div className="flex-1">
+                            <p className="text-xs text-amber-200/90">
+                              This tool provides educational analysis only, not financial advice. Consult a qualified financial advisor for investment decisions.
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setDisclaimerDismissed(true);
+                              localStorage.setItem('disclaimerDismissed', 'true');
+                            }}
+                            className="text-amber-400 hover:text-amber-300 shrink-0"
+                            aria-label="Dismiss disclaimer"
+                          >
+                            <span className="material-symbols-outlined text-sm">close</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     messages.map((msg, i) => (
@@ -478,6 +553,10 @@ export function AgentWorkspace() {
                         runId={msg.runId}
                         sessionId={sessionId}
                         onFeedback={msg.runId ? (rating) => handleFeedback(msg.runId!, rating) : undefined}
+                        confidence={msg.confidence}
+                        confidenceLevel={msg.confidenceLevel}
+                        verificationPassed={msg.verificationPassed}
+                        requiresEscalation={msg.requiresEscalation}
                       />
                     ))
                   )}

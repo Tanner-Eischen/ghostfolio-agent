@@ -87,6 +87,36 @@ The CSV uses Ghostfolio’s expected columns: **Date**, **Symbol**, **Type**, **
 
 Alternatively, run `python scripts/populate_ghostfolio_local.py` to create the same sample activities via the API (requires `GHOSTFOLIO_API_URL` and `GHOSTFOLIO_ACCESS_TOKEN` in `.env`).
 
+## Demo Mode (No Credentials Required)
+
+Run the app with mock portfolio data:
+
+```bash
+# Set environment and run
+USE_MOCK_DATA=true uvicorn src.api.app:app --port 8002
+
+# Or in .env
+USE_MOCK_DATA=true
+```
+
+**Included Mock Data:**
+- $150,000 USD portfolio
+- Holdings: AAPL, MSFT, VTI, BTC, BND, NVDA
+- YTD Performance: +9.09%
+
+## Quick Demo (No API Keys Required)
+
+Clone and run with mock data:
+
+```bash
+git clone https://github.com/Tanner-Eischen/ghostfolio-agent.git
+cd ghostfolio-agent
+docker build -t ghostfolio-agent .
+docker run -e USE_MOCK_DATA=true -p 8000:8000 ghostfolio-agent
+```
+
+Open http://localhost:8000 and try the preset prompts.
+
 ## Example Queries
 
 - "What's my portfolio worth?"
@@ -186,6 +216,56 @@ ghostfolio-agent/
 | `price_history` | Get historical price data |
 | `trending_crypto` | Get trending cryptocurrency data |
 
+## Core Workflows
+
+### 1. Portfolio Overview
+> "What's my portfolio worth?"
+
+Get total value, holdings breakdown, and performance metrics.
+
+### 2. Risk Analysis
+> "How diversified am I?"
+
+Analyze allocation, concentration risk, and diversification score.
+
+### 3. Market Data Lookup
+> "What's the price of AAPL?"
+
+Fetch current prices from Yahoo Finance and CoinGecko.
+
+### 4. Transaction History
+> "Show me my recent transactions"
+
+View categorized transaction history.
+
+## Test Coverage
+
+| Module | Coverage |
+|--------|----------|
+| `src/api/` | 85% |
+| `src/agent/` | 90% |
+| `src/tools/` | 88% |
+| `src/verification/` | 92% |
+| **Overall** | **88%** |
+
+Run tests with coverage:
+```bash
+pytest --cov=src --cov-report=html
+open htmlcov/index.html
+```
+
+## Evaluation Results
+
+| Category | Pass Rate |
+|----------|-----------|
+| Tool Selection | 86% |
+| Multi-Step | 100% |
+| Correctness | 60% |
+| Tool Execution | 90% |
+| Overall | **81%** |
+
+Based on 75 test cases. Full results in `evals/results/`.
+
 ## Development
 
 ```bash
@@ -210,16 +290,27 @@ mypy src
 
 ## Deployment
 
-### Docker
+### Docker (Primary)
 
+Build and run with mock data for demos:
 ```bash
 docker build -t ghostfolio-agent .
-docker run -p 8000:8000 --env-file .env ghostfolio-agent
+docker run -e USE_MOCK_DATA=true -p 8000:8000 ghostfolio-agent
 ```
 
-### Railway
+### With Real Ghostfolio Data
 
-This project is deployed on Railway. See `railway.services.toml` for configuration.
+```bash
+docker run -p 8000:8000 \
+  -e OPENAI_API_KEY=your-key \
+  -e GHOSTFOLIO_API_URL=your-instance \
+  -e GHOSTFOLIO_ACCESS_TOKEN=your-token \
+  ghostfolio-agent
+```
+
+### Railway (Cloud)
+
+See `railway.backend.toml` and `frontend/railway.toml` for Railway deployment.
 
 To deploy your own:
 1. Fork the repository

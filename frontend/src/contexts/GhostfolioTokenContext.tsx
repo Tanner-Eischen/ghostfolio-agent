@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useState } from 'react';
 import { GHOSTFOLIO_API_URL_STORAGE_KEY, GHOSTFOLIO_TOKEN_STORAGE_KEY } from '../api/client';
 

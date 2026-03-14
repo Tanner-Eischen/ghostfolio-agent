@@ -27,7 +27,7 @@ async def get_portfolio_summary() -> PortfolioSummaryResponse:
         Portfolio summary with key metrics
     """
     try:
-        agent = get_agent()
+        get_agent()  # Ensure agent is initialized
 
         # Use portfolio_analysis tool internally
         from src.tools import portfolio_analysis
@@ -74,7 +74,7 @@ async def get_risk_assessment() -> dict[str, Any]:
     Returns detailed risk metrics including concentration and diversification.
     """
     try:
-        agent = get_agent()
+        get_agent()  # Ensure agent is initialized
 
         from src.tools import risk_assessment
 

@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useContext, useState, useMemo, type ReactNode } from 'react';
 
 export type AppMode = 'developer' | 'user';
 
@@ -15,7 +16,7 @@ export function useAppMode() {
 
 export function AppModeProvider({ children }: { children: ReactNode }) {
   const [appMode, setAppMode] = useState<AppMode>('user');
-  const value = { appMode, setAppMode: useCallback(setAppMode, []) };
+  const value = useMemo(() => ({ appMode, setAppMode }), [appMode]);
   return (
     <AppModeContext.Provider value={value}>
       {children}

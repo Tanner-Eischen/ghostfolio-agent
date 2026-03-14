@@ -10,60 +10,60 @@ This module provides REST API endpoints for the Ghostfolio Agent:
 Task #15: Create FastAPI backend
 """
 
-import ast
-import json
-import re
-from collections import defaultdict, deque
+# Import eval runner API wrapper
+import sys
+import uuid
+from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-import uuid
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.agent import GhostfolioAgent
+from src.agent.core import reload_agent_tools
 from src.exceptions import get_friendly_error_message
+from src.tools.code_validator import sanitize_tool_name, validate_generated_tool
 from src.tools.registry import (
-    list_tools as list_registered_tools,
     get_tool_schema,
     register_generated_tool,
     unregister_generated_tool,
 )
-from src.tools.code_validator import validate_generated_tool, sanitize_tool_name
-from src.agent.core import reload_agent_tools
+from src.tools.registry import (
+    list_tools as list_registered_tools,
+)
 from src.utils.config import get_settings
+from src.utils.config_store import (
+    get_agent_config_store,
+    get_strategy_config_store,
+    get_verification_config_store,
+)
+from src.utils.langsmith_client import get_recent_runs, get_run_details
+from src.utils.logging import get_logger, setup_logging
 from src.utils.request_context import (
     REQUEST_GHOSTFOLIO_ACCESS_TOKEN,
     REQUEST_GHOSTFOLIO_API_URL,
 )
-from src.utils.config_store import (
-    get_verification_config_store,
-    get_strategy_config_store,
-    get_agent_config_store,
-)
-from src.utils.langsmith_client import get_recent_runs, get_run_details
-from src.utils.logging import get_logger, setup_logging
-from src.utils.tracing import log_feedback, is_tracing_enabled
+from src.utils.tracing import is_tracing_enabled, log_feedback
 from src.utils.usage_tracker import (
+    MODEL_PRICING,
+    calculate_cost,
     get_cost_by_run_id,
     get_cost_projections,
     get_usage_stats,
-    calculate_cost,
     seed_demo_usage,
-    MODEL_PRICING,
 )
-# Import eval runner API wrapper
-import sys
-from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from evals.runner_api import (
-    list_eval_cases as get_real_eval_cases,
-    get_latest_results,
     format_results_for_api,
+    get_latest_results,
     run_evals_async,
+)
+from evals.runner_api import (
+    list_eval_cases as get_real_eval_cases,
 )
 
 logger = get_logger(__name__)
@@ -646,7 +646,7 @@ async def get_portfolio_summary() -> PortfolioSummaryResponse:
         Portfolio summary with key metrics
     """
     try:
-        agent = get_agent()
+        get_agent()  # Ensure agent is initialized
 
         # Use portfolio_analysis tool internally
         from src.tools import portfolio_analysis
@@ -694,7 +694,7 @@ async def get_risk_assessment() -> dict[str, Any]:
     Returns detailed risk metrics including concentration and diversification.
     """
     try:
-        agent = get_agent()
+        get_agent()  # Ensure agent is initialized
 
         from src.tools import risk_assessment
 

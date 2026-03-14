@@ -11,7 +11,7 @@ def mock_settings():
     return Settings(
         environment="development",
         log_level="DEBUG",
-        anthropic_api_key="test_key",
+        openai_api_key="test_key",
         langchain_api_key="test_key",
         ghostfolio_access_token="test_token",
         use_mock_data=True,

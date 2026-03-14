@@ -24,7 +24,7 @@ async def health_check() -> HealthResponse:
     Returns:
         Health status with dependency information
     """
-    latency_stats = get_latency_stats()
+    _ = get_latency_stats()  # Available for future use
 
     return HealthResponse(
         status="healthy",
