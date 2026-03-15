@@ -50,8 +50,6 @@ dependencies = [
     # Backend
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
-    # Frontend
-    "streamlit>=1.38.0",
     # Utilities
     "python-dotenv>=1.0.0",
     "rich>=13.8.0",

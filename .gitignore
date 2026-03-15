@@ -171,6 +171,7 @@ frontend/dist/
 frontend/.env
 frontend/.env.local
 frontend/.env.*.local
+frontend/.vite/
 
 # Local planning/audit artifacts
 *.plan.md

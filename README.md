@@ -19,16 +19,12 @@ The demo includes sample portfolio data - no account needed. Just open the link 
 | "What's the price of AAPL?" | Real-time price lookup |
 | "What crypto do I own?" | Crypto holdings breakdown |
 
-## Screenshots
-
-<!-- Add screenshots here -->
-> **Coming soon:** Screenshots of the chat interface, portfolio analysis, and verification panel.
 
 ## Quick Start
 
 ### Option 1: Use the Hosted Demo (Recommended)
 
-1. Open [ghostfolio-agent-production-e24d.up.railway.app](https://ghostfolio-agent-production-e24d.up.railway.app)
+1. Open the live demo
 2. Start chatting with the sample portfolio
 3. (Optional) Connect your own Ghostfolio account via the avatar menu
 
