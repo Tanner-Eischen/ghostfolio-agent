@@ -19,6 +19,16 @@ The demo includes sample portfolio data - no account needed. Just open the link 
 | "What's the price of AAPL?" | Real-time price lookup |
 | "What crypto do I own?" | Crypto holdings breakdown |
 
+## Screenshots
+
+### Demo Mode
+![Homepage with demo mode banner](docs/screenshots/homepage-demo-mode.png)
+
+### Chat Response
+![Chat response showing portfolio analysis](docs/screenshots/chat-response.png)
+
+### Mobile View
+![Mobile responsive design](docs/screenshots/mobile-view.png)
 
 ## Quick Start
 
