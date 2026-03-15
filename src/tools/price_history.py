@@ -1,6 +1,5 @@
 """Price History Tool - Historical OHLC data for stocks (Yahoo) and crypto (CoinGecko)."""
 
-from datetime import datetime
 from typing import Any
 
 from langchain_core.tools import tool

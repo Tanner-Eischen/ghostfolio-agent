@@ -1,12 +1,13 @@
 """Tests for FactChecker verification module."""
 
-import pytest
 from datetime import datetime, timedelta
+
+import pytest
 
 from src.verification.fact_checker import (
     CitationCheckResult,
-    FactCheckResult,
     FactChecker,
+    FactCheckResult,
 )
 
 

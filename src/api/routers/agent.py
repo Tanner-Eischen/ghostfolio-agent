@@ -5,8 +5,8 @@ Agent model configuration and management.
 
 from fastapi import APIRouter, HTTPException
 
-from src.api.dependencies import get_agent, clear_agent
-from src.api.models import AgentConfigRequest, AgentConfigResponse, ALLOWED_AGENT_MODELS
+from src.api.dependencies import clear_agent
+from src.api.models import ALLOWED_AGENT_MODELS, AgentConfigRequest, AgentConfigResponse
 from src.utils.config_store import get_agent_config_store
 from src.utils.logging import get_logger
 

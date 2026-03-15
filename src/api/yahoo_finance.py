@@ -1,6 +1,5 @@
 """Yahoo Finance API Client for market data."""
 
-import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 

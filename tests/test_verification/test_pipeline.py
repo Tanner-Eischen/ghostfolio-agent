@@ -1,15 +1,15 @@
 """Tests for VerificationPipeline orchestration."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src.verification.confidence import ESCALATION_THRESHOLD
 from src.verification.pipeline import (
     EscalationStatus,
     VerificationPipeline,
     VerificationReport,
 )
-from src.verification.confidence import ESCALATION_THRESHOLD
 
 
 class TestVerificationPipeline:

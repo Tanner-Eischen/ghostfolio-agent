@@ -81,11 +81,11 @@ class ConfigStore:
             return data
 
         try:
-            with open(self.filepath, "r") as f:
+            with open(self.filepath) as f:
                 data = json.load(f)
             self._cache = data
             return data
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.warning(f"Config file corrupted, resetting: {e}")
             data = dict(self.defaults)
             self._save(data)

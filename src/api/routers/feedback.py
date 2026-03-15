@@ -6,8 +6,8 @@ Feedback submission and management.
 from fastapi import APIRouter
 
 from src.api.models import FeedbackRequest, FeedbackResponse
-from src.utils.tracing import log_feedback
 from src.utils.logging import get_logger
+from src.utils.tracing import log_feedback
 
 router = APIRouter()
 logger = get_logger(__name__)

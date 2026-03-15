@@ -4,7 +4,6 @@ import pytest
 
 from src.tools.price_history import (
     OHLCPoint,
-    PriceHistoryResult,
     SymbolPriceHistory,
     _coingecko_days,
     _compute_period_summary,

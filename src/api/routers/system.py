@@ -31,8 +31,9 @@ async def health_check() -> HealthResponse:
         version="0.1.0",
         environment=settings.environment,
         timestamp=datetime.utcnow().isoformat(),
+        mock_mode=settings.use_mock_data,
         dependencies={
-            "ghostfolio_api": "unknown",  # Would need actual check
+            "ghostfolio_api": "mock" if settings.use_mock_data else "unknown",
             "openai_api": "configured" if settings.openai_api_key else "not_configured",
         },
     )

@@ -3,26 +3,29 @@
 Evaluation case management and execution.
 """
 
+# Import eval runner API wrapper
+import sys
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
 from src.api.models import (
     EvalCaseResponse,
-    EvalResultsResponse,
-    EvalSummaryResponse,
     EvalResultResponse,
+    EvalResultsResponse,
     EvalRunRequest,
+    EvalSummaryResponse,
 )
 from src.utils.logging import get_logger
 
-# Import eval runner API wrapper
-import sys
-from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from evals.runner_api import (
-    list_eval_cases as get_real_eval_cases,
-    get_latest_results,
     format_results_for_api,
+    get_latest_results,
     run_evals_async,
+)
+from evals.runner_api import (
+    list_eval_cases as get_real_eval_cases,
 )
 
 router = APIRouter()

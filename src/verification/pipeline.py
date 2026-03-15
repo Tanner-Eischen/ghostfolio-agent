@@ -15,8 +15,8 @@ run in parallel where possible to reduce wall-clock time.
 """
 
 import asyncio
-from datetime import datetime, timezone, timedelta
-from typing import Any, Literal
+from datetime import datetime, timezone
+from typing import Any
 
 from langsmith import traceable
 from pydantic import BaseModel, Field
@@ -24,9 +24,9 @@ from pydantic import BaseModel, Field
 from src.utils.config_store import get_verification_config_store
 from src.utils.logging import get_logger
 from src.verification.confidence import (
+    ESCALATION_THRESHOLD,
     ConfidenceAssessment,
     ConfidenceScorer,
-    ESCALATION_THRESHOLD,
 )
 from src.verification.constraints import (
     ConstraintValidationResult,
@@ -598,9 +598,10 @@ class VerificationPipeline:
         triggers = []
         severity = "NONE"
 
-        # Check confidence threshold
-        if confidence.score < self.confidence_threshold:
-            triggers.append(f"Low confidence: {confidence.score:.1f}%")
+        # Check confidence threshold (handle None score)
+        confidence_score = confidence.score if confidence.score is not None else 0
+        if confidence_score < self.confidence_threshold:
+            triggers.append(f"Low confidence: {confidence_score:.1f}%")
             severity = "MEDIUM"
 
         # Check for critical constraint violations
@@ -683,7 +684,8 @@ class VerificationPipeline:
 
         # For MVP: Only fail on extremely low confidence (< 20)
         # This allows responses with tools used to pass even if confidence scoring is imperfect
-        if confidence.score < 20:
+        confidence_score = confidence.score if confidence.score is not None else 0
+        if confidence_score < 20:
             return False
 
         return True

@@ -1,49 +1,49 @@
 """API module - External API clients and routes."""
 
-from src.api.ghostfolio import GhostfolioClient
-from src.api.yahoo_finance import YahooFinanceClient
-from src.api.coingecko import CoinGeckoClient
 from src.api.app import app, create_app, run_server
-from src.api.dependencies import get_agent, clear_agent
+from src.api.coingecko import CoinGeckoClient
+from src.api.dependencies import clear_agent, get_agent
+from src.api.ghostfolio import GhostfolioClient
 from src.api.models import (
-    ChatRequest,
-    ChatResponse,
-    HealthResponse,
-    FeedbackRequest,
-    FeedbackResponse,
-    PortfolioSummaryResponse,
-    SessionSummary,
-    SessionsListResponse,
-    SessionHistoryResponse,
-    ErrorResponse,
     AgentConfigRequest,
     AgentConfigResponse,
+    ChatRequest,
+    ChatResponse,
+    CostComparisonEntry,
+    CostComparisonResponse,
+    CostProjectionsResponse,
+    ErrorResponse,
+    EvalCaseResponse,
+    EvalResultResponse,
+    EvalResultsResponse,
+    EvalRunRequest,
+    EvalSummaryResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    HealthResponse,
+    ModelPricingEntry,
+    ModelPricingResponse,
+    PortfolioSummaryResponse,
+    SeedDemoUsageResponse,
+    SessionHistoryResponse,
+    SessionsListResponse,
+    SessionSummary,
     StrategyConfigResponse,
     StrategyRecommendationResponse,
-    ToolResponse,
     ToolCreateRequest,
-    ToolRegistrationRequest,
-    ToolRegistrationResponse,
     ToolDetailResponse,
     ToolExecuteRequest,
     ToolExecuteResponse,
-    VerificationConfigResponse,
-    TraceResponse,
+    ToolRegistrationRequest,
+    ToolRegistrationResponse,
+    ToolResponse,
     TraceDetailResponse,
-    EvalCaseResponse,
-    EvalResultResponse,
-    EvalSummaryResponse,
-    EvalResultsResponse,
-    EvalRunRequest,
+    TraceResponse,
     UsageByModel,
     UsageStatsResponse,
-    CostProjectionsResponse,
-    ModelPricingEntry,
-    ModelPricingResponse,
-    CostComparisonEntry,
-    CostComparisonResponse,
-    SeedDemoUsageResponse,
+    VerificationConfigResponse,
 )
+from src.api.yahoo_finance import YahooFinanceClient
 
 __all__ = [
     # API Clients

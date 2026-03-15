@@ -4,11 +4,9 @@ This module contains all request and response models used by the API endpoints.
 Organized by domain for easier navigation.
 """
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # =============================================================================
 # Chat Models
@@ -58,6 +56,7 @@ class HealthResponse(BaseModel):
     version: str = Field(..., description="API version")
     environment: str = Field(..., description="Deployment environment")
     timestamp: str = Field(..., description="Current server time (ISO 8601)")
+    mock_mode: bool = Field(False, description="Whether server is using mock data")
     dependencies: dict[str, str] = Field(
         default_factory=dict,
         description="Status of external dependencies",

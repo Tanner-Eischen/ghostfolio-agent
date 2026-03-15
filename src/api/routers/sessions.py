@@ -3,13 +3,12 @@
 Session management and conversation history.
 """
 
-from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from src.api.models import SessionsListResponse, SessionHistoryResponse, SessionSummary
-from src.utils.session_store import SessionStore
+from src.api.models import SessionHistoryResponse, SessionsListResponse, SessionSummary
 from src.utils.logging import get_logger
+from src.utils.session_store import SessionStore
 
 router = APIRouter()
 logger = get_logger(__name__)

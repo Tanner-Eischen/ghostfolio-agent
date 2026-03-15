@@ -1,5 +1,6 @@
 """Configuration management using Pydantic Settings."""
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -52,10 +53,17 @@ class Settings(BaseSettings):
         # Prefer .env when it has a value so it wins over empty or stale process OPENAI_API_KEY
         if from_env_file:
             data = {**data, "openai_api_key": from_env_file}
-        # Prefer .env for use_mock_data so local .env wins over process env (e.g. USE_MOCK_DATA=true in shell)
-        use_mock_raw = _read_env_key("USE_MOCK_DATA") if _ENV_FILE.exists() else ""
-        if use_mock_raw:
-            data = {**data, "use_mock_data": use_mock_raw}
+        # For use_mock_data: prioritize os.environ (for tests) over .env file
+        use_mock_env = os.environ.get("USE_MOCK_DATA", "").strip().lower()
+        if use_mock_env in ("true", "1", "yes"):
+            data = {**data, "use_mock_data": "true"}
+        elif use_mock_env in ("false", "0", "no"):
+            data = {**data, "use_mock_data": "false"}
+        else:
+            # Fall back to .env file if not set in os.environ
+            use_mock_raw = _read_env_key("USE_MOCK_DATA") if _ENV_FILE.exists() else ""
+            if use_mock_raw:
+                data = {**data, "use_mock_data": use_mock_raw}
         # Prefer .env for Ghostfolio so evals and local runs always see .env (process env can override and empty the token)
         if _ENV_FILE.exists():
             gf_token = _read_env_key("GHOSTFOLIO_ACCESS_TOKEN")

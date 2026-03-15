@@ -5,16 +5,18 @@ for the API endpoints.
 """
 
 from collections import deque
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.agent import GhostfolioAgent
 from src.utils.config_store import get_agent_config_store
 from src.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from src.agent import GhostfolioAgent
 
 logger = get_logger(__name__)
 
 # Global agent instance
-_agent: GhostfolioAgent | None = None
+_agent: "GhostfolioAgent | None" = None
 
 # Performance metrics (in-memory, reset on restart)
 _chat_request_count: int = 0
@@ -27,8 +29,10 @@ def clear_agent() -> None:
     _agent = None
 
 
-def get_agent() -> GhostfolioAgent:
+def get_agent() -> "GhostfolioAgent":
     """Get or initialize the agent singleton. Uses model from agent config store."""
+    from src.agent import GhostfolioAgent
+
     global _agent
     store = get_agent_config_store()
     model = store.get("model", "gpt-4o-mini")

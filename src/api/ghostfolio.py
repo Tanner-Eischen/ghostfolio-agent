@@ -10,8 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.utils.caching import get_cache
 from src.utils.config import get_settings
-from src.utils.request_context import get_request_ghostfolio_token, get_request_ghostfolio_api_url
 from src.utils.logging import get_logger
+from src.utils.request_context import get_request_ghostfolio_api_url, get_request_ghostfolio_token
 
 logger = get_logger(__name__)
 

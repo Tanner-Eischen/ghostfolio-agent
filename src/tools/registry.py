@@ -11,20 +11,25 @@ extracting schemas and descriptions.
 
 import importlib.util
 import sys
-from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from src.tools import CORE_TOOLS
 from src.tools.code_validator import validate_generated_tool
-from src.tools.generated_store import get_generated_tool_store, GeneratedToolEntry
+from src.tools.generated_store import GeneratedToolEntry, get_generated_tool_store
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Cache for loaded generated tools
 _generated_tools_cache: dict[str, BaseTool] = {}
+
+
+def _get_core_tools() -> list[BaseTool]:
+    """Get core tools lazily to avoid circular imports."""
+    from src.tools import CORE_TOOLS
+
+    return CORE_TOOLS
 
 
 def list_tools() -> list[dict[str, Any]]:
@@ -36,7 +41,7 @@ def list_tools() -> list[dict[str, Any]]:
     tools = []
 
     # Add core tools
-    for tool in CORE_TOOLS:
+    for tool in _get_core_tools():
         tool_info = {
             "id": tool.name,
             "name": tool.name,
@@ -105,7 +110,7 @@ def get_all_tools() -> list[BaseTool]:
     Returns:
         List of all tool instances
     """
-    return list(CORE_TOOLS) + load_generated_tools()
+    return _get_core_tools() + load_generated_tools()
 
 
 def load_generated_tools() -> list[BaseTool]:
@@ -323,7 +328,7 @@ def get_tool_count() -> int:
     Returns:
         Number of tools
     """
-    return len(CORE_TOOLS) + get_generated_tool_store().get_tool_count()
+    return len(_get_core_tools()) + get_generated_tool_store().get_tool_count()
 
 
 __all__ = [

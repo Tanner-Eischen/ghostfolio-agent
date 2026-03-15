@@ -41,13 +41,13 @@ Example usage:
 """
 
 from src.verification.confidence import (
-    ConfidenceAssessment,
-    ConfidenceScorer,
     ESCALATION_THRESHOLD,
     HIGH_THRESHOLD,
     LOW_THRESHOLD,
     MEDIUM_THRESHOLD,
     VERY_HIGH_THRESHOLD,
+    ConfidenceAssessment,
+    ConfidenceScorer,
 )
 from src.verification.constraints import (
     ConstraintValidationResult,
@@ -56,8 +56,8 @@ from src.verification.constraints import (
 )
 from src.verification.fact_checker import (
     CitationCheckResult,
-    FactCheckResult,
     FactChecker,
+    FactCheckResult,
 )
 from src.verification.pipeline import (
     EscalationStatus,

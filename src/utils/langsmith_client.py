@@ -6,14 +6,11 @@ Observability page UI.
 Uses the LangSmith Python SDK Client for API access.
 """
 
-from datetime import datetime
 from typing import Any
-
-from langsmith import Client
 
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
-from src.utils.tracing import is_tracing_enabled, get_langsmith_client
+from src.utils.tracing import get_langsmith_client
 
 logger = get_logger(__name__)
 

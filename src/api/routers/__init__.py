@@ -15,19 +15,19 @@ This package contains modular routers organized by domain:
 - finances: Usage stats and cost projections
 """
 
-from src.api.routers.system import router as system_router
-from src.api.routers.chat import router as chat_router
-from src.api.routers.sessions import router as sessions_router
-from src.api.routers.feedback import router as feedback_router
-from src.api.routers.portfolio import router as portfolio_router
-from src.api.routers.market import router as market_router
-from src.api.routers.strategy import router as strategy_router
-from src.api.routers.tools import router as tools_router
-from src.api.routers.verification import router as verification_router
-from src.api.routers.traces import router as traces_router
-from src.api.routers.evals import router as evals_router
-from src.api.routers.finances import router as finances_router
 from src.api.routers.agent import router as agent_router
+from src.api.routers.chat import router as chat_router
+from src.api.routers.evals import router as evals_router
+from src.api.routers.feedback import router as feedback_router
+from src.api.routers.finances import router as finances_router
+from src.api.routers.market import router as market_router
+from src.api.routers.portfolio import router as portfolio_router
+from src.api.routers.sessions import router as sessions_router
+from src.api.routers.strategy import router as strategy_router
+from src.api.routers.system import router as system_router
+from src.api.routers.tools import router as tools_router
+from src.api.routers.traces import router as traces_router
+from src.api.routers.verification import router as verification_router
 
 __all__ = [
     "system_router",

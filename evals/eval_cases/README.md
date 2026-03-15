@@ -64,3 +64,8 @@ Overall case pass = all criteria pass (AND across criteria).
 python evals/run_evals.py --category mvp --validate   # Validate format
 python evals/run_evals.py --category mvp              # Run MVP evals
 ```
+
+## Consuming the dataset elsewhere
+
+- **PyPI package (no Hugging Face):** `pip install ghostfolio-agent-eval` then `from ghostfolio_agent_eval import load_eval_cases, get_dataset_path`. The package lives under `packages/ghostfolio_agent_eval` and can be published with `python -m build` and `twine upload dist/*`.
+- **Hugging Face:** Run `python scripts/upload_eval_dataset_to_hf.py` to push the same cases to the Hub (see script docstring).

@@ -13,6 +13,8 @@ import json
 import os
 import random
 from datetime import datetime, timedelta, timezone
+
+UTC = timezone.utc
 from pathlib import Path
 from typing import Any
 
@@ -65,9 +67,9 @@ def _load_usage_log() -> list[dict[str, Any]]:
         return []
 
     try:
-        with open(USAGE_LOG_FILE, "r") as f:
+        with open(USAGE_LOG_FILE) as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.warning(f"Could not load usage log: {e}")
         return []
 
@@ -286,7 +288,7 @@ def seed_demo_usage(
     Returns:
         Total number of entries appended.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     log = _load_usage_log()
     total = 0
     for model_id in MODEL_PRICING:

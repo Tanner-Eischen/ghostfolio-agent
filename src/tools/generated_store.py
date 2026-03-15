@@ -18,7 +18,7 @@ Each tool entry contains:
 
 import json
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -83,7 +83,7 @@ class GeneratedToolStore:
     def _read_registry(self) -> dict[str, dict[str, Any]]:
         """Read the tool registry from disk."""
         try:
-            with open(self.registry_file, "r", encoding="utf-8") as f:
+            with open(self.registry_file, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, FileNotFoundError):
             return {}

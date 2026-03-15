@@ -47,7 +47,7 @@ class SessionStore:
 
     def _read_index(self) -> list[dict[str, Any]]:
         try:
-            with open(self.index_path, "r", encoding="utf-8") as f:
+            with open(self.index_path, encoding="utf-8") as f:
                 data = json.load(f)
                 return data.get("entries", [])
         except (json.JSONDecodeError, FileNotFoundError):
@@ -61,7 +61,7 @@ class SessionStore:
         """Load message history for a session. Returns empty list if not found or on error."""
         path = self.storage_dir / _session_file_name(session_id)
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             raw = data.get("messages", [])
             if not raw:

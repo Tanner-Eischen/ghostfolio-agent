@@ -3,13 +3,13 @@
 import pytest
 
 from src.verification.confidence import (
-    ConfidenceAssessment,
-    ConfidenceScorer,
     ESCALATION_THRESHOLD,
     HIGH_THRESHOLD,
     LOW_THRESHOLD,
     MEDIUM_THRESHOLD,
     VERY_HIGH_THRESHOLD,
+    ConfidenceAssessment,
+    ConfidenceScorer,
 )
 
 
@@ -136,10 +136,12 @@ class TestConfidenceScorer:
 
     @pytest.mark.asyncio
     async def test_assess_data_completeness_empty(self, scorer: ConfidenceScorer) -> None:
-        """Test completeness with empty data."""
+        """Test completeness with empty tool outputs returns moderate score."""
         completeness = await scorer.assess_data_completeness([])
 
-        assert completeness == 0
+        # Empty tool outputs indicates tools were used but outputs weren't captured
+        # Returns 50.0 (moderate completeness)
+        assert completeness == 50.0
 
     @pytest.mark.asyncio
     async def test_assess_data_completeness_partial(

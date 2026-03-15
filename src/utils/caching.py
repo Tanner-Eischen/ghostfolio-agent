@@ -1,8 +1,8 @@
 """Caching utilities for API responses."""
 
-import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from cachetools import TTLCache
 

@@ -12,19 +12,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.dependencies import get_agent
 from src.api.routers import (
-    system_router,
-    chat_router,
-    sessions_router,
-    feedback_router,
-    portfolio_router,
-    market_router,
-    strategy_router,
-    tools_router,
-    verification_router,
-    traces_router,
-    evals_router,
-    finances_router,
     agent_router,
+    chat_router,
+    evals_router,
+    feedback_router,
+    finances_router,
+    market_router,
+    portfolio_router,
+    sessions_router,
+    strategy_router,
+    system_router,
+    tools_router,
+    traces_router,
+    verification_router,
 )
 from src.utils.config import get_settings
 from src.utils.logging import get_logger, setup_logging

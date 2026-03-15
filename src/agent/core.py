@@ -11,21 +11,21 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langsmith import traceable
 from langsmith.run_helpers import get_current_run_tree
 
 from src.agent.prompts import SYSTEM_PROMPT
-from src.tools import CORE_TOOLS, get_all_tools
+from src.exceptions import get_friendly_error_message
+from src.tools import get_all_tools
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
 from src.utils.session_store import SessionStore
-from src.utils.tracing import configure_langsmith, get_trace_url, is_tracing_enabled, TraceContext
+from src.utils.tracing import configure_langsmith, get_trace_url
 from src.utils.usage_tracker import log_usage
 from src.verification import VerificationPipeline
-from src.exceptions import get_friendly_error_message
 
 logger = get_logger(__name__)
 
@@ -516,7 +516,7 @@ class GhostfolioAgent:
             if session_id not in self._conversation_history:
                 self._conversation_history[session_id] = []
             self._conversation_history[session_id].append(user_message)
-            
+
             # Store all response messages (AIMessage with tool_calls, ToolMessages, final AIMessage)
             # This preserves the tool_call_id -> ToolMessage pairing that OpenAI requires
             for msg in response_messages:

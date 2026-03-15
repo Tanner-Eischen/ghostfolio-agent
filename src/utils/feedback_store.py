@@ -19,12 +19,13 @@ Each feedback entry contains:
 """
 
 import json
-import os
-from dataclasses import dataclass, field, asdict
+import threading
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+
+UTC = timezone.utc
 from pathlib import Path
 from typing import Any
-import threading
 
 from src.utils.logging import get_logger
 
@@ -91,7 +92,7 @@ class FeedbackStore:
     def _read_entries(self) -> list[dict[str, Any]]:
         """Read all entries from storage."""
         try:
-            with open(self.storage_path, "r", encoding="utf-8") as f:
+            with open(self.storage_path, encoding="utf-8") as f:
                 data = json.load(f)
                 return data.get("entries", [])
         except (json.JSONDecodeError, FileNotFoundError):
@@ -126,14 +127,14 @@ class FeedbackStore:
         Returns:
             The created FeedbackEntry
         """
-        feedback_id = f"fb_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{message_id[:8]}"
+        feedback_id = f"fb_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{message_id[:8]}"
 
         entry = FeedbackEntry(
             id=feedback_id,
             message_id=message_id,
             session_id=session_id,
             rating=rating,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             comment=comment,
             tool_calls=tool_calls or [],
             response_preview=response_preview[:200] if response_preview else "",

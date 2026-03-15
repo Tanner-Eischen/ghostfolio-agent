@@ -3,8 +3,9 @@
 These tests verify the API endpoints using FastAPI's TestClient.
 """
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 
 

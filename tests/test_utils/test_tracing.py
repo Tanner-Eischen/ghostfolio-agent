@@ -1,16 +1,17 @@
 """Tests for LangSmith tracing utilities."""
 
-import pytest
-from unittest.mock import MagicMock, patch
 import os
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.utils.tracing import (
+    TraceContext,
     configure_langsmith,
     get_langsmith_client,
     get_trace_url,
-    traced,
-    TraceContext,
     log_feedback,
+    traced,
 )
 
 

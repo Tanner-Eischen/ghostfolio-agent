@@ -3,31 +3,28 @@
 Usage statistics and cost projections.
 """
 
-from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.dependencies import get_agent
 from src.api.models import (
-    UsageStatsResponse,
-    UsageByModel,
-    CostProjectionsResponse,
-    ModelPricingResponse,
-    ModelPricingEntry,
-    CostComparisonResponse,
-    CostComparisonEntry,
-    SeedDemoUsageResponse,
     ALLOWED_AGENT_MODELS,
-)
-from src.utils.usage_tracker import (
-    get_usage_stats,
-    get_cost_projections,
-    get_cost_by_run_id,
-    seed_demo_usage,
-    MODEL_PRICING,
+    CostComparisonEntry,
+    CostComparisonResponse,
+    CostProjectionsResponse,
+    ModelPricingEntry,
+    ModelPricingResponse,
+    SeedDemoUsageResponse,
+    UsageByModel,
+    UsageStatsResponse,
 )
 from src.utils.config_store import get_agent_config_store
 from src.utils.logging import get_logger
+from src.utils.usage_tracker import (
+    MODEL_PRICING,
+    get_cost_projections,
+    get_usage_stats,
+    seed_demo_usage,
+)
 
 router = APIRouter()
 logger = get_logger(__name__)

@@ -3,6 +3,7 @@ import { Link, NavLink } from 'react-router-dom';
 import { useAppMode } from '../../contexts/AppModeContext';
 import { useGhostfolioToken } from '../../contexts/GhostfolioTokenContext';
 import { ModeToggle } from '../ModeToggle';
+import { healthApi } from '../../api/client';
 
 interface NavItem {
   label: string;
@@ -22,7 +23,15 @@ export function Navigation() {
   const { isConnected, setToken, clearToken, apiUrl, setApiUrl } = useGhostfolioToken();
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState('');
+  const [mockMode, setMockMode] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Check server health for mock mode on mount
+  useEffect(() => {
+    healthApi.check()
+      .then((health) => setMockMode(health.mock_mode ?? false))
+      .catch(() => {/* ignore */});
+  }, []);
 
   useEffect(() => {
     if (!avatarOpen) return;
@@ -46,43 +55,64 @@ export function Navigation() {
   };
 
   return (
-    <header className="sticky top-0 z-50 flex items-center justify-between flex-wrap gap-2 border-b border-solid border-surface-border bg-background-dark/80 backdrop-blur-md px-3 py-2 sm:px-6 sm:py-3">
-      <div className="flex items-center gap-2 sm:gap-6 flex-wrap min-w-0">
-        {/* Brand - clickable home; icon always, title hidden on narrow */}
-        <Link
-          to="/"
-          className="flex items-center gap-2 sm:gap-3 text-white hover:opacity-90 transition-opacity rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 shrink-0"
-          title="Ghostfolio Agent"
-        >
-          <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/20 text-primary">
-            <span className="material-symbols-outlined text-xl sm:text-2xl">smart_toy</span>
-          </div>
-          <h2 className="hidden sm:block text-base sm:text-xl font-bold leading-tight tracking-[-0.015em] truncate">
-            Ghostfolio Agent
-          </h2>
-        </Link>
-
-        {/* Nav Links - wrap on small screens */}
-        <nav className="flex items-center gap-1 flex-wrap" aria-label="Main navigation">
-          {visibleNavItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              end={item.path === '/'}
-              className={({ isActive }) =>
-                `px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm font-medium leading-normal rounded-lg transition-colors ${
-                  isActive
-                    ? 'text-white bg-surface-dark'
-                    : 'text-text-dim hover:text-white hover:bg-surface-dark'
-                }`
-              }
-              title={item.description}
+    <>
+      {/* Demo mode banner - shown when server is in mock mode and not connected */}
+      {mockMode && !isConnected && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 px-3 py-1.5 sm:px-6">
+          <div className="flex items-center justify-between gap-2 text-xs sm:text-sm">
+            <div className="flex items-center gap-2 text-amber-400">
+              <span className="material-symbols-outlined text-sm">science</span>
+              <span>
+                <strong>Demo Mode</strong> — exploring with sample portfolio data
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAvatarOpen(true)}
+              className="text-amber-300 hover:text-amber-200 underline underline-offset-2"
             >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-      </div>
+              Connect your Ghostfolio
+            </button>
+          </div>
+        </div>
+      )}
+      <header className="sticky top-0 z-50 flex items-center justify-between flex-wrap gap-2 border-b border-solid border-surface-border bg-background-dark/80 backdrop-blur-md px-3 py-2 sm:px-6 sm:py-3">
+        <div className="flex items-center gap-2 sm:gap-6 flex-wrap min-w-0">
+          {/* Brand - clickable home; icon always, title hidden on narrow */}
+          <Link
+            to="/"
+            className="flex items-center gap-2 sm:gap-3 text-white hover:opacity-90 transition-opacity rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 shrink-0"
+            title="Ghostfolio Agent"
+          >
+            <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/20 text-primary">
+              <span className="material-symbols-outlined text-xl sm:text-2xl">smart_toy</span>
+            </div>
+            <h2 className="hidden sm:block text-base sm:text-xl font-bold leading-tight tracking-[-0.015em] truncate">
+              Ghostfolio Agent
+            </h2>
+          </Link>
+
+          {/* Nav Links - wrap on small screens */}
+          <nav className="flex items-center gap-1 flex-wrap" aria-label="Main navigation">
+            {visibleNavItems.map((item) => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                end={item.path === '/'}
+                className={({ isActive }) =>
+                  `px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm font-medium leading-normal rounded-lg transition-colors ${
+                    isActive
+                      ? 'text-white bg-surface-dark'
+                      : 'text-text-dim hover:text-white hover:bg-surface-dark'
+                  }`
+                }
+                title={item.description}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+        </div>
 
       {/* Right side: mode toggle (dev only) and avatar with dropdown */}
       <div className="flex items-center gap-2 sm:gap-4 shrink-0">
@@ -195,5 +225,6 @@ export function Navigation() {
         </div>
       </div>
     </header>
+    </>
   );
 }

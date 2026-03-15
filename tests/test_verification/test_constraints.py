@@ -451,7 +451,6 @@ class TestConstraintValidator:
 
     def test_validate_nan_value(self, validator: ConstraintValidator) -> None:
         """Test that NaN values are detected."""
-        import math
 
         response = {"value": float("nan")}
         result = validator.validate_response(response, "general")

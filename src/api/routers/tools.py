@@ -5,27 +5,27 @@ Tool registry, execution, and management.
 
 import time
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from src.api.models import (
-    ToolResponse,
     ToolCreateRequest,
-    ToolRegistrationRequest,
-    ToolRegistrationResponse,
     ToolDetailResponse,
     ToolExecuteRequest,
     ToolExecuteResponse,
+    ToolRegistrationRequest,
+    ToolRegistrationResponse,
+    ToolResponse,
 )
+from src.tools.code_validator import sanitize_tool_name, validate_generated_tool
 from src.tools.registry import (
-    list_tools as list_registered_tools,
     get_tool_schema,
     register_generated_tool,
     unregister_generated_tool,
 )
-from src.tools.code_validator import validate_generated_tool, sanitize_tool_name
-from src.agent.core import reload_agent_tools
+from src.tools.registry import (
+    list_tools as list_registered_tools,
+)
 from src.utils.logging import get_logger
 
 router = APIRouter()
@@ -163,6 +163,8 @@ async def register_tool(request: ToolRegistrationRequest) -> ToolRegistrationRes
     3. Loads the tool dynamically
     4. Reloads the agent to make the tool available
     """
+    from src.agent.core import reload_agent_tools
+
     logger.info(f"Registering generated tool: {request.name}")
 
     # Validate the code first
@@ -226,6 +228,8 @@ async def delete_generated_tool(tool_name: str) -> dict:
     Returns:
         Dict with success status
     """
+    from src.agent.core import reload_agent_tools
+
     success, message = unregister_generated_tool(tool_name)
     if not success:
         raise HTTPException(status_code=404, detail=message)

@@ -392,34 +392,35 @@ class TestRiskAssessmentTool:
         """Test basic risk assessment returns valid result."""
         result = await risk_assessment.ainvoke({})
 
-        assert isinstance(result, RiskAssessmentResult)
-        assert 0 <= result.overall_risk_score <= 100
-        assert result.risk_level in ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
-        assert len(result.recommendations) >= 1
+        # Tool returns a dict, not a Pydantic model
+        assert isinstance(result, dict)
+        assert 0 <= result["overall_risk_score"] <= 100
+        assert result["risk_level"] in ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
+        assert len(result["recommendations"]) >= 1
 
     @pytest.mark.asyncio
     async def test_concentration_risk_calculated(self):
         """Test that concentration risk is calculated."""
         result = await risk_assessment.ainvoke({})
 
-        assert result.concentration_risk.top_holdings_pct >= 0
-        assert result.concentration_risk.single_asset_max >= 0
+        assert result["concentration_risk"]["top_holdings_pct"] >= 0
+        assert result["concentration_risk"]["single_asset_max"] >= 0
 
     @pytest.mark.asyncio
     async def test_diversification_metrics_calculated(self):
         """Test that diversification metrics are calculated."""
         result = await risk_assessment.ainvoke({})
 
-        assert result.diversification.num_holdings >= 0
-        assert result.diversification.num_asset_types >= 0
+        assert result["diversification"]["num_holdings"] >= 0
+        assert result["diversification"]["num_asset_types"] >= 0
 
     @pytest.mark.asyncio
     async def test_recommendations_present(self):
         """Test that recommendations are always provided."""
         result = await risk_assessment.ainvoke({})
 
-        assert len(result.recommendations) >= 1
-        for rec in result.recommendations:
+        assert len(result["recommendations"]) >= 1
+        for rec in result["recommendations"]:
             assert len(rec) > 0
 
     @pytest.mark.asyncio
@@ -436,8 +437,8 @@ class TestRiskAssessmentTool:
 
         result = await risk_assessment.ainvoke({"portfolio_data": custom_portfolio})
 
-        assert isinstance(result, RiskAssessmentResult)
-        assert result.diversification.num_holdings == 4
+        assert isinstance(result, dict)
+        assert result["diversification"]["num_holdings"] == 4
         # Well-diversified: single asset max 40% (25 pts), 3 asset classes (15 pts), sector ~70% (20 pts)
         # Total should be around 60
 
@@ -453,9 +454,9 @@ class TestRiskAssessmentTool:
 
         result = await risk_assessment.ainvoke({"portfolio_data": concentrated_portfolio})
 
-        assert result.overall_risk_score >= 60  # Should be high risk
-        assert result.risk_level in ["HIGH", "VERY_HIGH"]
-        assert len(result.warnings) > 0  # Should have warnings
+        assert result["overall_risk_score"] >= 60  # Should be high risk
+        assert result["risk_level"] in ["HIGH", "VERY_HIGH"]
+        assert len(result["warnings"]) > 0  # Should have warnings
 
     @pytest.mark.asyncio
     async def test_empty_portfolio(self):
@@ -464,20 +465,20 @@ class TestRiskAssessmentTool:
 
         result = await risk_assessment.ainvoke({"portfolio_data": empty_portfolio})
 
-        assert result.overall_risk_score == 0.0
-        assert result.risk_level == "LOW"
+        assert result["overall_risk_score"] == 0.0
+        assert result["risk_level"] == "LOW"
 
     @pytest.mark.asyncio
     async def test_data_source_is_ghostfolio(self):
         """Test that data source is set correctly."""
         result = await risk_assessment.ainvoke({})
 
-        assert result.data_source == "ghostfolio"
+        assert result["data_source"] == "ghostfolio"
 
     @pytest.mark.asyncio
     async def test_last_updated_is_set(self):
         """Test that last_updated timestamp is set."""
         result = await risk_assessment.ainvoke({})
 
-        assert result.last_updated is not None
-        assert len(result.last_updated) > 0
+        assert result["last_updated"] is not None
+        assert len(result["last_updated"]) > 0

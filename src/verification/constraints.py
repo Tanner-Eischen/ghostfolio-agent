@@ -8,7 +8,6 @@ Validates responses against domain constraints:
 
 import re
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -140,7 +139,7 @@ class ConstraintValidator:
             self.validate_allocation(allocations)
 
         # Check diversification score
-        div_score = response.get("diversification_score", 0)
+        div_score = response.get("diversification_score", 0) or 0
         if not (0 <= div_score <= 100):
             self._add_violation(
                 "diversification_score",
@@ -214,7 +213,7 @@ class ConstraintValidator:
     def _validate_risk_response(self, response: dict[str, Any]) -> None:
         """Validate risk assessment response."""
         # Check risk score
-        risk_score = response.get("risk_score", response.get("overall_risk_score", 0))
+        risk_score = response.get("risk_score", response.get("overall_risk_score", 0)) or 0
         if not (0 <= risk_score <= 100):
             self._add_violation(
                 "risk_score",

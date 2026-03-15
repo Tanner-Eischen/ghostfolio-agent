@@ -4,11 +4,10 @@ Main chat endpoint and related functionality.
 """
 
 import uuid
-from typing import Any
 
 from fastapi import APIRouter
 
-from src.api.dependencies import get_agent, add_latency_sample, increment_chat_request_count
+from src.api.dependencies import add_latency_sample, get_agent, increment_chat_request_count
 from src.api.models import ChatRequest, ChatResponse
 from src.exceptions import get_friendly_error_message
 from src.utils.logging import get_logger

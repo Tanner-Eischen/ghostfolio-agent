@@ -6,6 +6,7 @@ Run with OPENAI_API_KEY set. Skip if not set.
 """
 
 import os
+
 import pytest
 from fastapi.testclient import TestClient
 

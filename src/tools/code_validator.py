@@ -12,7 +12,6 @@ being registered as an agent tool.
 
 import ast
 from dataclasses import dataclass
-from typing import Any
 
 from src.utils.logging import get_logger
 

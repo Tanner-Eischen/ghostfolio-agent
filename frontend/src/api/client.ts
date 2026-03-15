@@ -70,6 +70,7 @@ export interface HealthResponse {
   status: string;
   version: string;
   environment: string;
+  mock_mode: boolean;
   agent_ready: boolean;
   dependencies: {
     openai: boolean;

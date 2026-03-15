@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from src.api.models import TraceResponse, TraceDetailResponse
+from src.api.models import TraceDetailResponse, TraceResponse
 from src.utils.langsmith_client import get_recent_runs, get_run_details
 from src.utils.logging import get_logger
 

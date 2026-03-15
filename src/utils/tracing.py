@@ -7,11 +7,12 @@ This module provides:
 - Helper functions for feedback and trace URLs
 """
 
-import os
 import functools
-from typing import Any, Callable, TypeVar
+import os
+from collections.abc import Callable
+from typing import Any, TypeVar
 
-from langsmith import traceable, Client
+from langsmith import Client, traceable
 
 from src.utils.config import get_settings
 from src.utils.logging import get_logger
