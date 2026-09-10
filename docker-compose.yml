@@ -1,115 +1,44 @@
-# =============================================================================
-# Ghostfolio Agent Docker Compose
-# =============================================================================
-# Run FastAPI backend and Streamlit frontend together
-#
-# Usage:
-#   docker-compose up -d          # Start services in background
-#   docker-compose up --build     # Rebuild and start
-#   docker-compose logs -f        # View logs
-#   docker-compose down           # Stop services
-#
-# Services:
-#   - backend:  FastAPI on http://localhost:8000
-#   - frontend: Streamlit on http://localhost:8501
-
-version: "3.8"
-
 services:
-  # ---------------------------------------------------------------------------
-  # FastAPI Backend
-  # ---------------------------------------------------------------------------
   backend:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: ghostfolio-agent-backend
-    restart: unless-stopped
+      dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      # Load from .env file
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-true}
-      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
-      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
-      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-AgentForge}
-      - LANGSMITH_WORKSPACE_ID=${LANGSMITH_WORKSPACE_ID}
-      - GHOSTFOLIO_API_URL=${GHOSTFOLIO_API_URL:-http://localhost:3333}
-      - GHOSTFOLIO_ACCESS_TOKEN=${GHOSTFOLIO_ACCESS_TOKEN}
-      - USE_MOCK_DATA=${USE_MOCK_DATA:-true}
-      - YAHOO_FINANCE_ENABLED=${YAHOO_FINANCE_ENABLED:-true}
-      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
-      - ENVIRONMENT=${ENVIRONMENT:-development}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - HOST=0.0.0.0
-      - PORT=8000
-      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8501}
-      # Docker-specific settings
-      - PYTHONPATH=/app
-    command: uvicorn src.api.routes:app --host 0.0.0.0 --port 8000
+      HOST: 0.0.0.0
+      PORT: 8000
+      USE_MOCK_DATA: ${USE_MOCK_DATA:-true}
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - ghostfolio-data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-    networks:
-      - ghostfolio-network
 
-  # ---------------------------------------------------------------------------
-  # Streamlit Frontend
-  # ---------------------------------------------------------------------------
   frontend:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: ghostfolio-agent-frontend
-    restart: unless-stopped
+      dockerfile: Dockerfile.frontend
     ports:
-      - "8501:8501"
+      - "3000:8080"
     environment:
-      # Load from .env file
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - LANGSMITH_TRACING=${LANGSMITH_TRACING:-true}
-      - LANGSMITH_ENDPOINT=${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
-      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
-      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-AgentForge}
-      - LANGSMITH_WORKSPACE_ID=${LANGSMITH_WORKSPACE_ID}
-      - GHOSTFOLIO_API_URL=${GHOSTFOLIO_API_URL:-http://localhost:3333}
-      - GHOSTFOLIO_ACCESS_TOKEN=${GHOSTFOLIO_ACCESS_TOKEN}
-      - USE_MOCK_DATA=${USE_MOCK_DATA:-true}
-      - YAHOO_FINANCE_ENABLED=${YAHOO_FINANCE_ENABLED:-true}
-      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
-      - ENVIRONMENT=${ENVIRONMENT:-development}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
-      # Backend URL for frontend to communicate
-      - BACKEND_URL=http://backend:8000
-      # Docker-specific settings
-      - PYTHONPATH=/app
-      # Streamlit settings
-      - STREAMLIT_SERVER_PORT=8501
-      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
-      - STREAMLIT_SERVER_HEADLESS=true
-      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-    command: streamlit run app/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+      BACKEND_URL: http://backend:8000
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
-    networks:
-      - ghostfolio-network
+      start_period: 10s
 
-# -----------------------------------------------------------------------------
-# Networks
-# -----------------------------------------------------------------------------
-networks:
-  ghostfolio-network:
-    driver: bridge
+volumes:
+  ghostfolio-data:

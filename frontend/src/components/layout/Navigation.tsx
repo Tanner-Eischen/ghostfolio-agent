@@ -1,5 +1,5 @@
 import { Link, NavLink } from 'react-router-dom';
-import { useAppMode } from '../../contexts/AppModeContext';
+import { useAppMode } from '../../contexts/app-mode';
 import { ModeToggle } from '../ModeToggle';
 
 interface NavItem {

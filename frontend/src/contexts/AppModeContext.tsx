@@ -1,21 +1,9 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
-
-export type AppMode = 'developer' | 'user';
-
-const AppModeContext = createContext<{
-  appMode: AppMode;
-  setAppMode: (mode: AppMode) => void;
-}>({ appMode: 'user', setAppMode: () => {} });
-
-export function useAppMode() {
-  const ctx = useContext(AppModeContext);
-  if (!ctx) throw new Error('useAppMode must be used within AppModeProvider');
-  return ctx;
-}
+import { useMemo, useState, type ReactNode } from 'react';
+import { AppModeContext, type AppMode } from './app-mode';
 
 export function AppModeProvider({ children }: { children: ReactNode }) {
   const [appMode, setAppMode] = useState<AppMode>('user');
-  const value = { appMode, setAppMode: useCallback(setAppMode, []) };
+  const value = useMemo(() => ({ appMode, setAppMode }), [appMode]);
   return (
     <AppModeContext.Provider value={value}>
       {children}

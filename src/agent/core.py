@@ -566,6 +566,38 @@ class GhostfolioAgent:
         """Get descriptions of all available tools."""
         return [{"name": tool.name, "description": tool.description} for tool in self.tools]
 
+    def get_conversation_history(self, session_id: str) -> list[dict[str, Any]]:
+        """Return a session history in the role/content format used by clients."""
+        messages = self.get_session_history(session_id)
+        history = []
+        for message in messages:
+            if isinstance(message, HumanMessage):
+                role = "user"
+            elif isinstance(message, AIMessage):
+                role = "assistant"
+            else:
+                role = message.type
+            history.append({"role": role, "content": message.content})
+        return history
+
+    async def analyze_portfolio(self, session_id: str | None = None) -> dict[str, Any]:
+        """Run a general portfolio analysis."""
+        return await self.chat_with_context("Analyze my portfolio.", session_id=session_id)
+
+    async def assess_risk(self, session_id: str | None = None) -> dict[str, Any]:
+        """Assess portfolio concentration and diversification risk."""
+        return await self.chat_with_context(
+            "Assess my portfolio risk and diversification.",
+            session_id=session_id,
+        )
+
+    async def check_compliance(self, session_id: str | None = None) -> dict[str, Any]:
+        """Run the portfolio compliance checks."""
+        return await self.chat_with_context(
+            "Check my portfolio for compliance issues.",
+            session_id=session_id,
+        )
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """List all sessions with message count and last accessed time (from persistent store)."""
         return self._session_store.list_sessions()

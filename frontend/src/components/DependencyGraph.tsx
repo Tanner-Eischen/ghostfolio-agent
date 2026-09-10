@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   ReactFlow,
   Background,
@@ -83,10 +83,7 @@ export function DependencyGraph(props: Props) {
 
 function Inner({ nodes: apiNodes, edges: apiEdges, searchTerm = '', className = '' }: Props) {
   const { fitView, zoomIn, zoomOut } = useReactFlow();
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
-
-  useEffect(() => {
+  const { nodes, edges } = useMemo(() => {
     // Deduplicate by id (React Flow keeps one node per id; duplicates would hide nodes)
     const seenIds = new Set<string>();
     const uniqueNodes: DependencyNode[] = [];
@@ -111,9 +108,7 @@ function Inner({ nodes: apiNodes, edges: apiEdges, searchTerm = '', className = 
     console.log('API nodes:', apiNodes.length, 'unique:', uniqueNodes.length, 'visible:', nodesToRender.length, term ? `(filter: "${searchTerm}")` : '');
 
     if (nodesToRender.length === 0) {
-      setNodes([]);
-      setEdges([]);
-      return;
+      return { nodes: [], edges: [] };
     }
 
     // Create a set of valid node IDs for validation
@@ -150,12 +145,14 @@ function Inner({ nodes: apiNodes, edges: apiEdges, searchTerm = '', className = 
 
     console.log('Flow nodes:', flowNodes.length, 'Flow edges:', flowEdges.length, '(filtered from', apiEdges.length, ')');
 
-    const layouted = layoutWithDagre(flowNodes, flowEdges);
-    setNodes(layouted);
-    setEdges(flowEdges);
+    return { nodes: layoutWithDagre(flowNodes, flowEdges), edges: flowEdges };
+  }, [apiNodes, apiEdges, searchTerm]);
 
-    setTimeout(() => fitView({ padding: 0.3 }), 100);
-  }, [apiNodes, apiEdges, searchTerm, fitView]);
+  useEffect(() => {
+    if (nodes.length === 0) return undefined;
+    const timeout = window.setTimeout(() => fitView({ padding: 0.3 }), 100);
+    return () => window.clearTimeout(timeout);
+  }, [fitView, nodes]);
 
   const uniqueNodeCount = new Set(apiNodes.map(n => n.id)).size;
   const visibleCount = searchTerm.trim()

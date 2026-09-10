@@ -164,9 +164,7 @@ class ConfidenceScorer:
             Completeness score from 0-100
         """
         if not tool_outputs:
-            # Check if tools were used but outputs weren't captured
-            # In this case, assume moderate completeness
-            return 50.0
+            return 0.0
 
         total_fields = 0
         complete_fields = 0

@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Ghostfolio Agent Team", email = "team@ghostfolio-agent.dev" }
+    { name = "Tanner Eischen" }
 ]
 keywords = [
     "ghostfolio",
@@ -45,7 +45,7 @@ dependencies = [
     "openai>=1.0.0",
     # API & HTTP
     "httpx>=0.27.0",
-    "pydantic>=2.9.0",
+    "pydantic>=2.10.0",
     "pydantic-settings>=2.5.0",
     # Backend
     "fastapi>=0.115.0",
@@ -76,10 +76,10 @@ dev = [
 ghostfolio-agent = "src.api.routes:run_server"
 
 [project.urls]
-Homepage = "https://github.com/ghostfolio-agent/ghostfolio-agent"
-Documentation = "https://github.com/ghostfolio-agent/ghostfolio-agent#readme"
-Repository = "https://github.com/ghostfolio-agent/ghostfolio-agent"
-Issues = "https://github.com/ghostfolio-agent/ghostfolio-agent/issues"
+Homepage = "https://github.com/Tanner-Eischen/ghostfolio-agent"
+Documentation = "https://github.com/Tanner-Eischen/ghostfolio-agent#readme"
+Repository = "https://github.com/Tanner-Eischen/ghostfolio-agent"
+Issues = "https://github.com/Tanner-Eischen/ghostfolio-agent/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
@@ -88,6 +88,9 @@ packages = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-v --tb=short --cov=src --cov-report=term-missing"
+markers = [
+    "integration: tests that require a configured external service",
+]
 
 [tool.mypy]
 python_version = "3.11"

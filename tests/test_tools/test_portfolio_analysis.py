@@ -182,9 +182,9 @@ class TestPortfolioAnalysisTool:
     @pytest.mark.asyncio
     async def test_basic_analysis(self):
         """Test basic portfolio analysis returns valid result."""
-        result = await portfolio_analysis.ainvoke({})
+        payload = await portfolio_analysis.ainvoke({})
+        result = PortfolioAnalysisResult.model_validate(payload)
 
-        # LangChain ainvoke returns the Pydantic model directly
         assert isinstance(result, PortfolioAnalysisResult)
         assert result.total_value > 0
         assert len(result.holdings) > 0
@@ -193,14 +193,16 @@ class TestPortfolioAnalysisTool:
     @pytest.mark.asyncio
     async def test_analysis_with_timeframe(self):
         """Test analysis with specific timeframe."""
-        result = await portfolio_analysis.ainvoke({"timeframe": "1Y"})
+        payload = await portfolio_analysis.ainvoke({"timeframe": "1Y"})
+        result = PortfolioAnalysisResult.model_validate(payload)
 
         assert result.performance.timeframe == "1Y"
 
     @pytest.mark.asyncio
     async def test_analysis_with_account_filter(self):
         """Test analysis filtered to specific account."""
-        result = await portfolio_analysis.ainvoke({"account_id": "acc1"})
+        payload = await portfolio_analysis.ainvoke({"account_id": "acc1"})
+        result = PortfolioAnalysisResult.model_validate(payload)
 
         # Should filter holdings based on account's orders
         assert len(result.holdings) >= 0
@@ -210,7 +212,8 @@ class TestPortfolioAnalysisTool:
     @pytest.mark.asyncio
     async def test_invalid_timeframe_defaults_to_ytd(self):
         """Invalid timeframe should default to YTD."""
-        result = await portfolio_analysis.ainvoke({"timeframe": "INVALID"})
+        payload = await portfolio_analysis.ainvoke({"timeframe": "INVALID"})
+        result = PortfolioAnalysisResult.model_validate(payload)
 
         # Should still work with YTD as default
         assert result.performance.timeframe == "YTD"
@@ -218,7 +221,8 @@ class TestPortfolioAnalysisTool:
     @pytest.mark.asyncio
     async def test_diversification_score_in_valid_range(self):
         """Diversification score should be between 0 and 100."""
-        result = await portfolio_analysis.ainvoke({})
+        payload = await portfolio_analysis.ainvoke({})
+        result = PortfolioAnalysisResult.model_validate(payload)
 
         score = result.diversification_score
         assert 0 <= score <= 100

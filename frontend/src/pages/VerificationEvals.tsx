@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAppMode } from '../contexts/AppModeContext';
+import { useAppMode } from '../contexts/app-mode';
 import { verificationApi, evalsApi } from '../api/client';
 import type { VerificationConfig, EvalCase, EvalResult, EvalSummary, EvalCriterionResult, ToolCallDetail } from '../api/client';
 

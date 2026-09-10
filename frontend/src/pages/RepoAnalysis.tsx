@@ -13,7 +13,7 @@ import { Sidebar } from '../components/layout/Sidebar';
 import { RepoConnector } from '../components/RepoConnector';
 import { DependencyGraph, type DependencyGraphLayout } from '../components/DependencyGraph';
 import { ModuleDetails } from '../components/ModuleDetails';
-import { computeFileStats } from '../components/RepoStats';
+import { computeFileStats } from '../utils/repoStats';
 import { RepoChat } from '../components/RepoChat';
 import type { DependencyNode } from '../api/client';
 
@@ -200,9 +200,13 @@ export function RepoAnalysis() {
     loadConnections();
   }, [fetchData]);
 
+  const connectedRepoId = connectedRepo?.id;
+  const selectedFilePath = selectedFile?.path;
+  const selectedFileType = selectedFile?.type;
+
   // Load file content when a file is selected in the explorer
   useEffect(() => {
-    if (!connectedRepo || !selectedFile || selectedFile.type !== 'file') {
+    if (!connectedRepoId || !selectedFilePath || selectedFileType !== 'file') {
       setFileContent(null);
       return;
     }
@@ -210,7 +214,7 @@ export function RepoAnalysis() {
     setFileContentLoading(true);
     setFileContent(null);
     repoApi
-      .getFileContent(connectedRepo.id, selectedFile.path)
+      .getFileContent(connectedRepoId, selectedFilePath)
       .then((res) => {
         if (!cancelled) {
           setFileContent(res.content);
@@ -225,7 +229,7 @@ export function RepoAnalysis() {
     return () => {
       cancelled = true;
     };
-  }, [connectedRepo?.id, selectedFile?.path, selectedFile?.type]);
+  }, [connectedRepoId, selectedFilePath, selectedFileType]);
 
   const handleConnected = (connection: RepoConnection) => {
     setConnectedRepo(connection);

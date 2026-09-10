@@ -57,7 +57,7 @@ class TestGhostfolioAgentInit:
                 agent = GhostfolioAgent()
 
                 assert agent.tools is not None
-                assert len(agent.tools) == 5
+                assert len(agent.tools) == 7
                 assert agent.use_verification is True
                 assert agent.verification is not None
 
@@ -99,7 +99,7 @@ class TestGhostfolioAgentTools:
                 agent = GhostfolioAgent()
 
                 tools = agent.get_tools()
-                assert len(tools) == 5
+                assert len(tools) == 7
 
                 tool_names = {t.name for t in tools}
                 expected_names = {
@@ -108,6 +108,8 @@ class TestGhostfolioAgentTools:
                     "risk_assessment",
                     "market_data_lookup",
                     "compliance_check",
+                    "price_history",
+                    "trending_crypto",
                 }
                 assert tool_names == expected_names
 
@@ -118,7 +120,7 @@ class TestGhostfolioAgentTools:
                 agent = GhostfolioAgent()
 
                 descriptions = agent.get_tool_descriptions()
-                assert len(descriptions) == 5
+                assert len(descriptions) == 7
 
                 for desc in descriptions:
                     assert "name" in desc
@@ -132,7 +134,7 @@ class TestGhostfolioAgentTools:
 
                 assert "portfolio_analysis" in agent.tool_map
                 assert "risk_assessment" in agent.tool_map
-                assert len(agent.tool_map) == 5
+                assert len(agent.tool_map) == 7
 
 
 class TestGhostfolioAgentChat:

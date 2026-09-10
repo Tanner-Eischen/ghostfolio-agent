@@ -7,7 +7,6 @@ import {
   feedbackApi,
   sessionsApi,
   type RepoConnection,
-  type FileNode,
   type HealthResponse,
   type Tool,
   type ChatResponse,
@@ -15,9 +14,7 @@ import {
 } from '../api/client';
 import { RepoConnector } from '../components/RepoConnector';
 import { ApiCoverage, type ApiEndpoint } from '../components/ApiCoverage';
-import { computeFileStats } from '../components/RepoStats';
-
-import { useAppMode } from '../contexts/AppModeContext';
+import { useAppMode } from '../contexts/app-mode';
 
 // Tab types
 type MainTab = 'chat' | 'tools' | 'traces';
@@ -164,7 +161,6 @@ export function AgentWorkspace() {
   const [connectedRepo, setConnectedRepo] = useState<RepoConnection | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [endpoints, setEndpoints] = useState<ApiEndpoint[]>([]);
-  const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Chat state
@@ -217,12 +213,7 @@ export function AgentWorkspace() {
       setHealth(healthData);
 
       if (repo) {
-        const [filesData, pointsData] = await Promise.all([
-          repoApi.getFiles(repo.id, 2).catch(() => null),
-          repoApi.getInjectionPoints(repo.id, 50).catch(() => null),
-        ]);
-
-        if (filesData?.root) setFileTree(filesData.root);
+        const pointsData = await repoApi.getInjectionPoints(repo.id, 50).catch(() => null);
 
         // Convert injection points to API endpoints
         if (pointsData?.points) {
@@ -301,7 +292,6 @@ export function AgentWorkspace() {
     }
     setConnectedRepo(null);
     setEndpoints([]);
-    setFileTree(null);
     setLoading(false);
     showToast('Disconnected', 'success');
   };
@@ -409,9 +399,6 @@ export function AgentWorkspace() {
       ? 'I can help you understand the codebase and create tools'
       : 'Connect a repository for context-aware assistance')
     : 'I can help you understand your investments and financial data';
-
-  // Calculate file stats
-  const fileStats = fileTree ? computeFileStats(fileTree) : null;
 
   // Tabs to show based on mode
   const visibleTabs: MainTab[] = appMode === 'developer'

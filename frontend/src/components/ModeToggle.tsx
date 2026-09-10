@@ -1,4 +1,4 @@
-import type { AppMode } from '../contexts/AppModeContext';
+import type { AppMode } from '../contexts/app-mode';
 
 interface ModeToggleProps {
   mode: AppMode;

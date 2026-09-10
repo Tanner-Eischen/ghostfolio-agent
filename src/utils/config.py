@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     # Ghostfolio Configuration
     ghostfolio_api_url: str = "http://localhost:3333"
     ghostfolio_access_token: str = Field(default="", description="Ghostfolio access token")
-    use_mock_data: bool = False
+    use_mock_data: bool = True
 
     @field_validator("use_mock_data", mode="before")
     @classmethod

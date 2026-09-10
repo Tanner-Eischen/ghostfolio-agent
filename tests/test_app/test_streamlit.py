@@ -4,7 +4,7 @@ These tests verify the helper functions and logic without
 requiring a full Streamlit context.
 """
 
-import pytest
+from unittest.mock import patch
 
 
 class TestConfidenceStyles:
@@ -86,25 +86,30 @@ class TestConfidenceStyles:
         assert style["color"] == "#dc3545"
 
 
-class TestRunAsyncChat:
-    """Tests for async chat wrapper."""
+class TestSendChatMessage:
+    """Tests for the Streamlit backend client."""
 
-    def test_run_async_chat_returns_dict(self):
-        """Test that run_async_chat returns a dict."""
-        from app.streamlit_app import run_async_chat
+    def test_connection_error_returns_dict(self):
+        """Connection failures return the response shape used by the UI."""
+        import httpx
 
-        # Mock agent that raises error
-        result = run_async_chat(None, "test", "session")
+        from app.streamlit_app import send_chat_message
+
+        with patch("app.streamlit_app.httpx.Client", side_effect=httpx.ConnectError("offline")):
+            result = send_chat_message("test", "session")
         assert isinstance(result, dict)
         assert "message" in result
         assert "confidence" in result
         assert result["confidence"] == 0.0
 
-    def test_run_async_chat_error_handling(self):
-        """Test error handling in run_async_chat."""
-        from app.streamlit_app import run_async_chat
+    def test_connection_error_requires_escalation(self):
+        """Connection failures are marked for escalation."""
+        import httpx
 
-        result = run_async_chat(None, "test message", "test-session")
+        from app.streamlit_app import send_chat_message
+
+        with patch("app.streamlit_app.httpx.Client", side_effect=httpx.ConnectError("offline")):
+            result = send_chat_message("test message", "test-session")
 
         assert result["verification_passed"] is False
         assert result["requires_escalation"] is True

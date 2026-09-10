@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAppMode } from '../contexts/AppModeContext';
+import { useAppMode } from '../contexts/app-mode';
 import { tracesApi, financesApi, agentApi } from '../api/client';
 import type { Trace, TraceDetail, UsageStats, CostProjections, CostComparison } from '../api/client';
 

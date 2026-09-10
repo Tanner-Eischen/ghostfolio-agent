@@ -258,7 +258,6 @@ export function AgentChat() {
       console.error('Failed to load conversations from localStorage:', e);
       showToast('Failed to load conversation history', 'warning');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Save conversations to localStorage with limits
@@ -278,7 +277,6 @@ export function AgentChat() {
         showToast('Failed to save conversation. Storage may be full.', 'warning');
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversations]);
 
   // Load repo connections and tools together, track initial loading
